@@ -1,5 +1,8 @@
 # LETR: Line Segment Detection Using Transformers without Edges
 
+# python == 3.9
+# pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 torchaudio==0.8.1 -f https://download.pytorch.org/whl/torch_stable.html
+
 ## Introduction 
 This repository contains the official code and pretrained models for [Line Segment Detection Using Transformers without Edges](https://arxiv.org/abs/2101.01909). [Yifan Xu*](https://yfxu.com/), [Weijian Xu*](https://weijianxu.com/), [David Cheung](https://github.com/sawsa307), and [Zhuowen Tu](https://pages.ucsd.edu/~ztu/). CVPR2021 (**Oral**)
 
