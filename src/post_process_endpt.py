@@ -14,6 +14,9 @@ from PIL import Image
 from scipy.stats import mode
 import json
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
+
 # DBSCAN
 EPS = 0.5
 MIN_SAMPLES = 10
@@ -37,6 +40,19 @@ SCORE_THR = 0.55
 VERT_THR = 10
 HORI_THR = 0.1
 BUFFER_THR = 2
+
+
+def plot_pred_point(df):
+    # Extract xyzrgb columns (x, y, z, r, g, b)
+    points = df[['x', 'y', 'z']].values
+    colors = df[['r', 'g', 'b']].values
+    colors_nor = df[['r', 'g', 'b']].values / 255.0  # Normalize RGB values to [0, 1]
+
+    # Create Open3D point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.colors = o3d.utility.Vector3dVector(colors_nor)  # Assign RGB colors
+    o3d.visualization.draw_geometries([pcd])
 
 def cluster_floor_ceiling(df):
     # Extract xyzrgb columns (x, y, z, r, g, b)
@@ -255,19 +271,19 @@ label_dict = {label: idx for idx, label in enumerate(labels)}
 
 
 # Load the CSV file
-# file_name = '00-10231-20_CortevaYorkTest_Output'
-# survey_basis = np.array([
-#     [1.0, 0.0, 0.0],  # X
-#     [0.0, 1.0, 0.0],  # Y
-#     [0.0, 0.0, 1.0]   # Z
-#     ]).T  # 3x3 rotation matrix
-
-file_name = 'WyomingStateFair_Laramie_Output'
+file_name = '00-10231-20_CortevaYorkTest_Output'
 survey_basis = np.array([
-    [-0.23829087279918065, 0.9711938323221605, 0.0],   # X
-    [-0.9711938323221605, -0.23829087279918065, 0.0],  # Y
-    [0.0, 0.0, 0.99999999999999978]                    # Z
+    [1.0, 0.0, 0.0],  # X
+    [0.0, 1.0, 0.0],  # Y
+    [0.0, 0.0, 1.0]   # Z
     ]).T  # 3x3 rotation matrix
+
+# file_name = 'WyomingStateFair_Laramie_Output'
+# survey_basis = np.array([
+#     [-0.23829087279918065, 0.9711938323221605, 0.0],   # X
+#     [-0.9711938323221605, -0.23829087279918065, 0.0],  # Y
+#     [0.0, 0.0, 0.99999999999999978]                    # Z
+#     ]).T  # 3x3 rotation matrix
 
 # file_name = 'WyomingStateFair_Bridger_Output'
 # survey_basis = np.array([
@@ -301,7 +317,7 @@ file_path = f"src/{file_name}.csv"  # Change this to your actual file path
 df = pd.read_csv(file_path)
 
 # prepare for JSON
-points_lst, level_lst, wall_lst = [], [], []
+points_lst, level_lst, wall_lst, floor_lst, ceiling_lst = [], [], [], [], []
 
 ### floor
 print('Processing Floor......')
@@ -313,6 +329,8 @@ cluster_dict_floor = cluster_floor_ceiling(align_axis_floor_df) ##
 floor_ceiling_bboxz = [] ##
 corner = []
 level_id = 1
+floor_id = 1
+ceiling_id = 1
 
 for num in cluster_dict_floor:
     df_points_colors = pd.DataFrame(cluster_dict_floor[num], columns=['x', 'y', 'z', 'r', 'g', 'b'])
@@ -338,7 +356,7 @@ for num in cluster_dict_floor:
     # Add points
     for pt in rotated_with_rgb:
         points_lst.append({
-            "category": "level",
+            "category": "floor",
             "id": str(level_id),
             "location": {
                 "x": float(pt[0]),
@@ -354,11 +372,18 @@ for num in cluster_dict_floor:
     # Add level metadata
     level_lst.append({
         "id": str(level_id),
-        "end_points": [[float(x), float(y), float(z)] for x, y, z in rotated_corner],
-        "z_mode": mode_z
+        "zMode": mode_z
     })
-
     level_id += 1
+
+    floor_lst.append({
+        "id": str(floor_id),
+        "edgePoints": [
+            {"x": float(x), "y": float(y), "z": float(z)}   
+            for x, y, z in rotated_corner]
+    })
+    floor_id += 1
+    
 
 ### ceiling
 print('Processing Ceiling......')
@@ -387,7 +412,7 @@ for num in cluster_dict_ceiling:
     # Add points
     for pt in rotated_with_rgb:
         points_lst.append({
-            "category": "level",
+            "category": "ceiling",
             "id": str(level_id),
             "location": {
                 "x": float(pt[0]),
@@ -403,11 +428,17 @@ for num in cluster_dict_ceiling:
     # Add level metadata
     level_lst.append({
         "id": str(level_id),
-        "end_points": [[float(x), float(y), float(z)] for x, y, z in rotated_corner],
-        "z_mode": mode_z
+        "zMode": mode_z
     })
-
     level_id += 1
+
+    ceiling_lst.append({
+        "id": str(ceiling_id),
+        "edgePoints": [
+            {"x": float(x), "y": float(y), "z": float(z)}  
+            for x, y, z in rotated_corner]
+    })
+    ceiling_id += 1
 
 print('floor_ceiling_bboxz', floor_ceiling_bboxz)
 plane_arr = sorted_merged_floor_ceiling_plane(floor_ceiling_bboxz)
@@ -415,11 +446,15 @@ plane_arr = sorted_merged_floor_ceiling_plane(floor_ceiling_bboxz)
 ### wall
 print('Processing Wall......')
 
+segment_wall_df = df[df['pred_label']==label_dict['Wall']].reset_index(drop=True)
+align_axis_wall_df = point_axis_align(segment_wall_df, survey_basis) 
+plot_pred_point(align_axis_wall_df)
+
 num_level = len(cluster_dict_floor)
 align_axis_df = point_axis_align(df, survey_basis)
 xyzrgb = align_axis_df[['x', 'y', 'z', 'r', 'g', 'b']].values  
 # obtain line segmentation model checkpoints
-checkpoint = torch.load('checkpoints\checkpoint0024.pth', map_location='cpu')
+checkpoint = torch.load('checkpoints\checkpoint0024.pth', map_location=device)
 model = load_line_segmentation_model(checkpoint)
 wall_bbox_edge = []
 print('no.level', num_level)
@@ -480,7 +515,9 @@ for level in range(num_level):
 
         wall_lst.append({
             "id": str(wall_id),
-            "bbox": [[float(x), float(y), float(z)] for x, y, z in rotated_edge[i]],
+            "bbox": [
+                {"x": float(x), "y": float(y), "z": float(z)} 
+                for x, y, z in rotated_edge[i]]
         })
 
         wall_id += 1
@@ -489,11 +526,13 @@ for level in range(num_level):
 output_dict = {
     "points": points_lst,
     "levels": level_lst,
-    "walls": wall_lst
+    "walls": wall_lst,
+    "floors": floor_lst,
+    "ceilings": ceiling_lst
 }
 
 # Save to a file
-with open(f"{file_name}_test_output_rgb.json", "w") as f:
+with open(f"{file_name}_output.json", "w") as f:
     json.dump(output_dict, f, indent=2)
 
 with open(f"{file_name}_test_wall_bbox_edge.pkl", "wb") as f:
