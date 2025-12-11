@@ -194,10 +194,10 @@ def project_points_to_floor(filtered_points, bins):
     # Save plot to a BytesIO object
     img_bytes = BytesIO()
     # Save figure without extra white space
-    img_path = 'bridger.png'
-    plt.savefig(img_path, bbox_inches='tight', pad_inches=0, dpi=300)
+    # img_path = 'bridger.png'
+    # plt.savefig(img_path, bbox_inches='tight', pad_inches=0, dpi=300)
     plt.savefig(img_bytes, format='png', bbox_inches='tight', pad_inches=0, dpi=300)
-    # img_bytes.seek(0) 
+    img_bytes.seek(0) 
     img = Image.open(img_bytes)
     img_array = np.array(img)
     bgr_arr = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
@@ -357,7 +357,7 @@ for num in cluster_dict_floor:
     for pt in rotated_with_rgb:
         points_lst.append({
             "category": "floor",
-            "id": str(level_id),
+            "id": str(floor_id),
             "location": {
                 "x": float(pt[0]),
                 "y": float(pt[1]),
@@ -398,6 +398,7 @@ for num in cluster_dict_ceiling:
     rotated_corner = corner_xyz @ survey_basis 
     corner.append(rotated_corner)
 
+
     cluster_xyz_arr = cluster_dict_ceiling[num][:, :3]
     cluster_rgb_arr = cluster_dict_ceiling[num][:, 3:]
 
@@ -413,7 +414,7 @@ for num in cluster_dict_ceiling:
     for pt in rotated_with_rgb:
         points_lst.append({
             "category": "ceiling",
-            "id": str(level_id),
+            "id": str(ceiling_id),
             "location": {
                 "x": float(pt[0]),
                 "y": float(pt[1]),
@@ -456,6 +457,7 @@ xyzrgb = align_axis_df[['x', 'y', 'z', 'r', 'g', 'b']].values
 # obtain line segmentation model checkpoints
 checkpoint = torch.load('checkpoints\checkpoint0024.pth', map_location=device)
 model = load_line_segmentation_model(checkpoint)
+
 wall_bbox_edge = []
 print('no.level', num_level)
 wall_id = 1
@@ -479,8 +481,13 @@ for level in range(num_level):
         inside_points = [[point[0],point[1]] for point in xy_projected if poly.contains(Point(point))]
         if inside_points:
             pts_in_poly.append(inside_points)
-        
-    points_zrgb = [find_zrgb(np.array(poly), filtered_points) for poly in pts_in_poly]
+    
+    # filtered_points: [N, 6] → columns: x, y, z, r, g, b
+    lookup = {
+        (float(x), float(y)): filtered_points[i, 2:6]
+        for i, (x, y) in enumerate(filtered_points[:, :2])
+    }
+    points_zrgb = [find_zrgb(np.array(poly), lookup) for poly in pts_in_poly]
 
     points_xyz = [arr[:, :3] for arr in points_zrgb]
     points_rgb = [arr[:, 3:] for arr in points_zrgb]

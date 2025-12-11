@@ -10,7 +10,6 @@ import geopandas as gpd
 from shapely.geometry import LineString, Polygon, MultiPolygon
 from shapely.ops import unary_union
 import open3d as o3d
-import pickle
 
 
 class Compose(object):
@@ -181,19 +180,13 @@ def find_z(points, filtered_points): ##
 
     return points_xyz
 
-def find_zrgb(points, filtered_points):
-    # Initialize new columns (4 values: z, r, g, b) with NaN
-    new_columns = np.full((points.shape[0], 4), np.nan)
+def find_zrgb(points, lookup):
+    out = np.zeros((points.shape[0], 4)) * np.nan  # z,r,g,b columns
 
     for i, (x, y) in enumerate(points):
-        match_idx = np.where((filtered_points[:, 0] == x) & (filtered_points[:, 1] == y))
-        if match_idx[0].size > 0:
-            new_columns[i] = filtered_points[match_idx[0][0], 2:6]  # Extract z, r, g, b from filtered_points
+        out[i] = lookup.get((float(x), float(y)), [np.nan, np.nan, np.nan, np.nan])
 
-    # Concatenate original points with new columns
-    points_zrgb = np.hstack((points, new_columns))
-
-    return points_zrgb
+    return np.hstack([points, out])
 
 def load_line_segmentation_model(checkpoint):
     # load model
