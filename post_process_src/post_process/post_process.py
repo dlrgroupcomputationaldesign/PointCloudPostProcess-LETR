@@ -8,8 +8,8 @@ import pickle
 import alphashape
 from shapely.geometry import Point, LineString, Polygon
 import torch
-from .wall_seg_util import *
-from .floor_ceiling_util import *
+from wall_seg_util import *
+from floor_ceiling_util import *
 from io import BytesIO
 from PIL import Image
 from scipy.stats import mode
