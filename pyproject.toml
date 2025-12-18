@@ -26,3 +26,10 @@ package-dir = {"" = "post_process_src"}
 
 [tool.setuptools.packages.find]
 where = ["post_process_src"]
+
+[project.optional-dependencies]
+torch_cu111 = [
+  "torch==1.8.1+cu111",
+  "torchvision==0.9.1+cu111",
+  "torchaudio==0.8.1",
+]
