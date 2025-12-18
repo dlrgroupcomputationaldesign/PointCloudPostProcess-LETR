@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "point-cloud-post-process"
+version = "0.1.0"
+description = "Post process after PointNet inference on point cloud data."
+
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.setuptools]
+package-dir = {"" = "post_process_src"}
+
+[tool.setuptools.packages.find]
+where = ["post_process_src"]
