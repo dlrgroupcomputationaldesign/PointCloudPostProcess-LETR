@@ -1,24 +1,17 @@
 import pandas as pd
 import numpy as np
-import open3d as o3d
-from sklearn.cluster import DBSCAN
-from sklearn.preprocessing import StandardScaler
-import matplotlib.pyplot as plt
-import pickle
-import alphashape
-from shapely.geometry import Point, LineString, Polygon
+from shapely.geometry import Point, Polygon
 import torch
-from wall_seg_util import *
-from floor_ceiling_util import *
-from io import BytesIO
-from PIL import Image
+from .utils.wall_seg_util import *
+from .utils.floor_ceiling_util import *
 from scipy.stats import mode
 import json
+import pickle
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Read the label file
-with open("src\labels_clean2.txt", "r") as file:
-    labels = [line.strip() for line in file.readlines()]  # Read and clean lines
+with open("labels_clean2.pkl", 'rb') as file:
+    labels = pickle.load(file)
 
 # Create dictionary mapping labels to numeric values
 label_dict = {label: idx for idx, label in enumerate(labels)}
@@ -231,7 +224,6 @@ def run_walls(csv_path, walls_path, parameters, floor_bboxz, line_seg_model, out
 
         rotated_wall_xyz = [pts @ np.array(parameters['SURVEY_BASIS']).T for pts in points_xyz]
         rotated_with_rgb = [np.hstack((xyz, rgb)) for xyz, rgb in zip(rotated_wall_xyz, points_rgb)]
-
 
         # Add points
         for i, bbox in enumerate(rotated_with_rgb):

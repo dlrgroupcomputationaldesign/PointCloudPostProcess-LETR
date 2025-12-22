@@ -141,7 +141,6 @@ def fit_ceiling_floor(df, distance_threshold, ransac_n, num_iterations, alpha_va
 
 def sorted_merged_floor_ceiling_plane(bbox_arr):
     sorted_data = sorted(bbox_arr, key=lambda x: x[1]) #sort by zmin
-    print('sorted', sorted_data)
     plane_arr = sorted_data
     # Create the result array
     # plane_arr = []

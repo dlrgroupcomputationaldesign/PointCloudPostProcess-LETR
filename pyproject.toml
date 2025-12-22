@@ -34,3 +34,6 @@ torch_cu111 = [
   "torchvision==0.9.1+cu111",
   "torchaudio==0.8.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/dlrgroupcomputationaldesign/PointCloudPostProcess-LETR"

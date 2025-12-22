@@ -4,8 +4,8 @@ import cv2
 import matplotlib.pyplot as plt
 import torchvision.transforms.functional as functional
 import torch.nn.functional as F
-from models import build_model
-from util.misc import nested_tensor_from_tensor_list
+from ..models import build_model
+from .misc import nested_tensor_from_tensor_list
 import geopandas as gpd
 from shapely.geometry import LineString, Polygon, MultiPolygon
 from shapely.ops import unary_union
