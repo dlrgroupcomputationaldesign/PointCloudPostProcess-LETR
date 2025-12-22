@@ -6,13 +6,10 @@ from .utils.wall_seg_util import *
 from .utils.floor_ceiling_util import *
 from scipy.stats import mode
 import json
-import pickle
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# Read the label file
-with open("labels_clean2.pkl", 'rb') as file:
-    labels = pickle.load(file)
 
+labels = ['Other', 'Floor', 'Ceiling', 'Wall']
 # Create dictionary mapping labels to numeric values
 label_dict = {label: idx for idx, label in enumerate(labels)}
 
