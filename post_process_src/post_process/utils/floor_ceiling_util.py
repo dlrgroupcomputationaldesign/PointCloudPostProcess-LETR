@@ -80,7 +80,8 @@ def fit_ceiling_floor(df, distance_threshold, ransac_n, num_iterations, alpha_va
     o3d.visualization.draw_geometries([inlier_cloud, outlier_cloud], window_name="Plane Fitting")
 
     centroid = np.mean(np.asarray(inlier_cloud.points), axis=0)
-    bbox = pcd.get_oriented_bounding_box()
+    # bbox = pcd.get_oriented_bounding_box()
+    bbox = inlier_cloud.get_oriented_bounding_box()
     bbox.color = (0, 1, 0)  # Green box
     bbox_zmin = bbox.get_min_bound()[2]  # Compute the center
     bbox_zmax = bbox.get_max_bound()[2]
