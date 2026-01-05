@@ -13,9 +13,8 @@ labels = ['Other', 'Floor', 'Ceiling', 'Wall']
 # Create dictionary mapping labels to numeric values
 label_dict = {label: idx for idx, label in enumerate(labels)}
 
-def run_floors(csv_path, floors_path, parameters, output_json=False):
+def run_floors(df, floors_path, parameters, output_json=False):
     print("Running floor post-processing...")
-    df = pd.read_csv(csv_path)
     floor_lst, floor_level, point_lst = [], [], []
     segment_floor_df = df[df['pred_label']==label_dict['Floor']].reset_index(drop=True)
 
@@ -23,7 +22,6 @@ def run_floors(csv_path, floors_path, parameters, output_json=False):
     cluster_dict_floor = cluster_floor_ceiling(align_axis_floor_df, parameters['EPS'], parameters['MIN_SAMPLES']) 
 
     floor_bboxz = [] 
-    level_id = 1
     floor_id = 1
 
     for num in cluster_dict_floor:
@@ -62,11 +60,6 @@ def run_floors(csv_path, floors_path, parameters, output_json=False):
                     "b": int(pt[5])
                 }
             })
-        # level_lst.append({
-        #     "id": str(level_id),
-        #     "zMode": mode_z
-        # })
-        # level_id += 1
 
         floor_level.append(mode_z)
 
@@ -80,7 +73,6 @@ def run_floors(csv_path, floors_path, parameters, output_json=False):
 
     floor_output_dict = {
     "points": point_lst,
-    # "levels": level_lst,
     "floors": floor_lst
     }
 
@@ -91,9 +83,8 @@ def run_floors(csv_path, floors_path, parameters, output_json=False):
 
     return floor_output_dict, floor_bboxz, floor_level
         
-def run_ceilings(csv_path, ceilings_path, parameters, output_json=False):
+def run_ceilings(df, ceilings_path, parameters, output_json=False):
     print("Running ceiling post-processing...")
-    df = pd.read_csv(csv_path)
     ceiling_lst, ceiling_level, point_lst = [], [], []   
     segment_ceiling_df = df[df['pred_label']==label_dict['Ceiling']].reset_index(drop=True)
     align_axis_ceiling_df = point_axis_align(segment_ceiling_df, np.array(parameters['SURVEY_BASIS']).T) 
@@ -106,7 +97,6 @@ def run_ceilings(csv_path, ceilings_path, parameters, output_json=False):
         df_points_colors = pd.DataFrame(cluster_dict_ceiling[num], columns=['x', 'y', 'z', 'r', 'g', 'b'])
         bbox_zmin, bbox_zmax, corner_xyz = fit_ceiling_floor(df_points_colors, parameters['DIS_THR_C'], parameters['RANSAC_N_C'], parameters['NUM_ITER_C'], parameters['ALPHA_C'])
         rotated_corner = corner_xyz @ np.array(parameters['SURVEY_BASIS']).T
-        # corner.append(rotated_corner)
 
         cluster_xyz_arr = cluster_dict_ceiling[num][:, :3]
         cluster_rgb_arr = cluster_dict_ceiling[num][:, 3:]
@@ -136,12 +126,6 @@ def run_ceilings(csv_path, ceilings_path, parameters, output_json=False):
                 }
             })
 
-        # level_lst.append({
-        #     "id": str(level_id),
-        #     "zMode": mode_z
-        # })
-        # level_id += 1
-
         ceiling_level.append(mode_z)
 
         ceiling_lst.append({
@@ -154,7 +138,6 @@ def run_ceilings(csv_path, ceilings_path, parameters, output_json=False):
 
     ceiling_output_dict = {
     "points": point_lst,
-    # "levels": level_lst,
     "ceilings": ceiling_lst
     }
 
@@ -165,9 +148,8 @@ def run_ceilings(csv_path, ceilings_path, parameters, output_json=False):
 
     return ceiling_output_dict, ceiling_level
 
-def run_walls(csv_path, walls_path, parameters, floor_bboxz, line_seg_model, output_json=False):
+def run_walls(df, walls_path, parameters, floor_bboxz, line_seg_model, output_json=False):
     print("Running wall post-processing...")
-    df = pd.read_csv(csv_path)
     wall_lst, point_lst = [], []
     num_level = len(floor_bboxz)  
     plane_arr = sorted_merged_floor_ceiling_plane(floor_bboxz)
@@ -180,7 +162,6 @@ def run_walls(csv_path, walls_path, parameters, floor_bboxz, line_seg_model, out
 
     checkpoint = torch.load(line_seg_model, map_location=device)
     model = load_line_segmentation_model(checkpoint)
-    # wall_bbox_edge = []
     wall_id = 1
     for level in range(num_level):
         if level == num_level - 1:    
@@ -217,8 +198,6 @@ def run_walls(csv_path, walls_path, parameters, floor_bboxz, line_seg_model, out
 
         rotated_edge = [pts @ np.array(parameters['SURVEY_BASIS']).T for pts in edge_points]
 
-        # wall_bbox_edge.append(rotated_edge)
-
         rotated_wall_xyz = [pts @ np.array(parameters['SURVEY_BASIS']).T for pts in points_xyz]
         rotated_with_rgb = [np.hstack((xyz, rgb)) for xyz, rgb in zip(rotated_wall_xyz, points_rgb)]
 
@@ -240,14 +219,14 @@ def run_walls(csv_path, walls_path, parameters, floor_bboxz, line_seg_model, out
                     }
                 })
 
-        wall_lst.append({
-            "id": str(wall_id),
-            "bbox": [
-                {"x": float(x), "y": float(y), "z": float(z)} 
-                for x, y, z in rotated_edge[i]]
-        })
+            wall_lst.append({
+                "id": str(wall_id),
+                "bbox": [
+                    {"x": float(x), "y": float(y), "z": float(z)} 
+                    for x, y, z in rotated_edge[i]]
+            })
 
-        wall_id += 1
+            wall_id += 1
         
     wall_output_dict = {
     "points": point_lst,
