@@ -17,26 +17,30 @@ import json
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
-# DBSCAN
-EPS = 0.5
-MIN_SAMPLES = 10
+# Floor DBSCAN
+EPS_F = 0.5
+MIN_SAMPLES_F = 10
 
 # Floor RANSAC
 DIS_THR_F = 1 
 RANSAC_N_F = 10 
 NUM_ITER_F = 1000 
-ALPHA_F = 1
+
+# Ceiling DBSCAN
+EPS_C = 0.5
+MIN_SAMPLES_C = 10
 
 # Ceiling RANSAC
-DIS_THR_C = 4
+DIS_THR_C = 1  #4
 RANSAC_N_C = 10 
 NUM_ITER_C = 1000 
-ALPHA_C = 1
 
+ALPHA_F = 2  #1
+ALPHA_C = 1
 PROJECTED_BINS = 300
 RESIZE_WIDTH = 400
-INT_THR = 35
-SCORE_THR = 0.55
+INT_THR = 20   #35
+SCORE_THR = 0.6  #0.55
 VERT_THR = 10
 HORI_THR = 0.1
 BUFFER_THR = 2
@@ -54,7 +58,7 @@ def plot_pred_point(df):
     pcd.colors = o3d.utility.Vector3dVector(colors_nor)  # Assign RGB colors
     o3d.visualization.draw_geometries([pcd])
 
-def cluster_floor_ceiling(df):
+def cluster_floor_ceiling(df, eps, min_samples):
     # Extract xyzrgb columns (x, y, z, r, g, b)
     points = df[['x', 'y', 'z']].values
     colors = df[['r', 'g', 'b']].values
@@ -71,7 +75,7 @@ def cluster_floor_ceiling(df):
     features_scaled = scaler.fit_transform(features)
 
     # Perform DBSCAN clustering
-    dbscan = DBSCAN(eps=EPS, min_samples=MIN_SAMPLES)  # Adjust parameters as needed
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples)  # Adjust parameters as needed
     cluster_num = dbscan.fit_predict(features_scaled)
 
     # Count the number of clusters (excluding noise points, labeled as -1)
@@ -113,7 +117,8 @@ def fit_ceiling_floor(df, distance_threshold, ransac_n, num_iterations, alpha_va
     o3d.visualization.draw_geometries([inlier_cloud, outlier_cloud], window_name="Plane Fitting")
 
     centroid = np.mean(np.asarray(inlier_cloud.points), axis=0)
-    bbox = pcd.get_oriented_bounding_box()
+    # bbox = pcd.get_oriented_bounding_box()
+    bbox = inlier_cloud.get_oriented_bounding_box()
     bbox.color = (0, 1, 0)  # Green box
     bbox_zmin = bbox.get_min_bound()[2]  # Compute the center
     bbox_zmax = bbox.get_max_bound()[2]
@@ -216,28 +221,27 @@ def point_axis_align(df, survey_basis):
 
 def sorted_merged_floor_ceiling_plane(bbox_arr):
     sorted_data = sorted(bbox_arr, key=lambda x: x[1]) #sort by zmin
+    plane_arr = sorted_data
+    # # Create the result array
+    # plane_arr = []
+    # i = 0
+    # while i < len(sorted_data):
+    #     current = sorted_data[i]
 
-    # Create the result array
-    plane_arr = []
-    i = 0
-    while i < len(sorted_data):
-        current = sorted_data[i]
+    #     if current[0] == 'ceiling' and i + 1 < len(sorted_data):
+    #         next_item = sorted_data[i + 1]
+    #         if next_item[0] == 'floor':
+    #             # Merge ceiling and next floor
+    #             z_min = min(current[1], next_item[1])
+    #             z_max = max(current[2], next_item[2])
+    #             plane_arr.append([z_min, z_max])
+    #             i += 2  # Skip both
+    #             continue
 
-        if current[0] == 'ceiling' and i + 1 < len(sorted_data):
-            next_item = sorted_data[i + 1]
-            if next_item[0] == 'floor':
-                # Merge ceiling and next floor
-                z_min = min(current[1], next_item[1])
-                z_max = max(current[2], next_item[2])
-                plane_arr.append([z_min, z_max])
-                i += 2  # Skip both
-                continue
-
-        # Otherwise, just add the current one
-        plane_arr.append([current[1], current[2]])
-        i += 1
+    #     # Otherwise, just add the current one
+    #     plane_arr.append([current[1], current[2]])
+    #     i += 1
     return plane_arr
-
 
 def rotate_pt_back(mean, R, rotated_points):
     # Step 1: Shift rotated points back to the origin
@@ -271,19 +275,19 @@ label_dict = {label: idx for idx, label in enumerate(labels)}
 
 
 # Load the CSV file
-file_name = '00-10231-20_CortevaYorkTest_Output'
-survey_basis = np.array([
-    [1.0, 0.0, 0.0],  # X
-    [0.0, 1.0, 0.0],  # Y
-    [0.0, 0.0, 1.0]   # Z
-    ]).T  # 3x3 rotation matrix
-
-# file_name = 'WyomingStateFair_Laramie_Output'
+# file_name = '00-10231-20_CortevaYorkTest_Output'
 # survey_basis = np.array([
-#     [-0.23829087279918065, 0.9711938323221605, 0.0],   # X
-#     [-0.9711938323221605, -0.23829087279918065, 0.0],  # Y
-#     [0.0, 0.0, 0.99999999999999978]                    # Z
+#     [1.0, 0.0, 0.0],  # X
+#     [0.0, 1.0, 0.0],  # Y
+#     [0.0, 0.0, 1.0]   # Z
 #     ]).T  # 3x3 rotation matrix
+
+file_name = 'WyomingStateFair_Laramie_Output'
+survey_basis = np.array([
+    [-0.23829087279918065, 0.9711938323221605, 0.0],   # X
+    [-0.9711938323221605, -0.23829087279918065, 0.0],  # Y
+    [0.0, 0.0, 0.99999999999999978]                    # Z
+    ]).T  # 3x3 rotation matrix
 
 # file_name = 'WyomingStateFair_Bridger_Output'
 # survey_basis = np.array([
@@ -313,7 +317,7 @@ survey_basis = np.array([
 
 # file_name = 'AdultEd_Labled_Output'
 
-file_path = f"src/{file_name}.csv"  # Change this to your actual file path
+file_path = "WyomingStateFair_Laramie_inference_test.csv" # Change this to your actual file path
 df = pd.read_csv(file_path)
 
 # prepare for JSON
@@ -322,24 +326,23 @@ points_lst, level_lst, wall_lst, floor_lst, ceiling_lst = [], [], [], [], []
 ### floor
 print('Processing Floor......')
 segment_floor_df = df[df['pred_label']==label_dict['Floor']].reset_index(drop=True)
-# _, mean, R = point_axis_align_prev(segment_floor_df) 
-align_axis_floor_df = point_axis_align(segment_floor_df, survey_basis)  ##
-cluster_dict_floor = cluster_floor_ceiling(align_axis_floor_df) ##
-# cluster_dict_floor = cluster_floor_ceiling(segment_df)
+align_axis_floor_df = point_axis_align(segment_floor_df, survey_basis)  
+cluster_dict_floor = cluster_floor_ceiling(align_axis_floor_df, EPS_F, MIN_SAMPLES_F) ##
+print('No. of floor cluster:', len(cluster_dict_floor))
 floor_ceiling_bboxz = [] ##
-corner = []
+# corner = []
 level_id = 1
 floor_id = 1
-ceiling_id = 1
+
 
 for num in cluster_dict_floor:
     df_points_colors = pd.DataFrame(cluster_dict_floor[num], columns=['x', 'y', 'z', 'r', 'g', 'b'])
 
     bbox_zmin, bbox_zmax, corner_xyz = fit_ceiling_floor(df_points_colors, DIS_THR_F, RANSAC_N_F, NUM_ITER_F, ALPHA_F)
-    floor_ceiling_bboxz.append(['floor', bbox_zmin, bbox_zmax])
+    floor_ceiling_bboxz.append([bbox_zmin, bbox_zmax])
     
     rotated_corner = corner_xyz @ survey_basis 
-    corner.append(rotated_corner)
+    # corner.append(rotated_corner)
 
     cluster_xyz_arr = cluster_dict_floor[num][:, :3]
     cluster_rgb_arr = cluster_dict_floor[num][:, 3:]
@@ -389,14 +392,15 @@ for num in cluster_dict_floor:
 print('Processing Ceiling......')
 segment_ceiling_df = df[df['pred_label']==label_dict['Ceiling']].reset_index(drop=True)
 align_axis_ceiling_df = point_axis_align(segment_ceiling_df, survey_basis) 
-cluster_dict_ceiling = cluster_floor_ceiling(align_axis_ceiling_df) ##
-
+cluster_dict_ceiling = cluster_floor_ceiling(align_axis_ceiling_df, EPS_C, MIN_SAMPLES_C) ##
+print('No. of ceiling cluster:', len(cluster_dict_ceiling))
+ceiling_id = 1
 for num in cluster_dict_ceiling:
     # Convert NumPy array to DataFrame
     df_points_colors = pd.DataFrame(cluster_dict_ceiling[num], columns=['x', 'y', 'z', 'r', 'g', 'b'])
     bbox_zmin, bbox_zmax, corner_xyz = fit_ceiling_floor(df_points_colors, DIS_THR_C, RANSAC_N_C, NUM_ITER_C, ALPHA_C)
     rotated_corner = corner_xyz @ survey_basis 
-    corner.append(rotated_corner)
+    # corner.append(rotated_corner)
 
 
     cluster_xyz_arr = cluster_dict_ceiling[num][:, :3]
@@ -450,9 +454,10 @@ print('Processing Wall......')
 segment_wall_df = df[df['pred_label']==label_dict['Wall']].reset_index(drop=True)
 align_axis_wall_df = point_axis_align(segment_wall_df, survey_basis) 
 plot_pred_point(align_axis_wall_df)
-
-num_level = len(cluster_dict_floor)
+num_level = len(floor_ceiling_bboxz)
+# num_level = len(cluster_dict_floor)
 align_axis_df = point_axis_align(df, survey_basis)
+# xyzrgb = align_axis_wall_df[['x', 'y', 'z', 'r', 'g', 'b']].values  
 xyzrgb = align_axis_df[['x', 'y', 'z', 'r', 'g', 'b']].values  
 # obtain line segmentation model checkpoints
 checkpoint = torch.load('checkpoints\checkpoint0024.pth', map_location=device)
@@ -533,17 +538,14 @@ for level in range(num_level):
 output_dict = {
     "points": points_lst,
     "levels": level_lst,
-    "walls": wall_lst,
     "floors": floor_lst,
-    "ceilings": ceiling_lst
+    "ceilings": ceiling_lst,
+    "walls": wall_lst
 }
 
 # Save to a file
-with open(f"{file_name}_output.json", "w") as f:
+with open(f"{file_name}_sandbox2_test.json", "w") as f:
     json.dump(output_dict, f, indent=2)
-
-with open(f"{file_name}_test_wall_bbox_edge.pkl", "wb") as f:
-    pickle.dump(wall_bbox_edge, f)
 
 
 

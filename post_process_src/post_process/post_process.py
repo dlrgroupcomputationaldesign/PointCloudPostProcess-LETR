@@ -5,7 +5,7 @@ import torch
 from .utils.wall_seg_util import *
 from .utils.floor_ceiling_util import *
 from scipy.stats import mode
-import json
+from .utils.blob_util import setup_blob_clients, upload_dict_to_blob_json, setup_logger_in_memory, upload_logger_to_blob
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -13,21 +13,51 @@ labels = ['Other', 'Floor', 'Ceiling', 'Wall']
 # Create dictionary mapping labels to numeric values
 label_dict = {label: idx for idx, label in enumerate(labels)}
 
-def run_floors(df, floors_path, parameters, output_json=False):
-    print("Running floor post-processing...")
+
+logger = setup_logger_in_memory()
+
+log_blob_client = None
+
+def run_floors(df, parameters, logging_blob_location=None):
+    blobs = None
+    if logging_blob_location:
+        log_blob_client = True
+        # floor_json_blob_client = True
+        blobs = setup_blob_clients(logging_blob_location)
+
+    logger.info("Running floor post-processing...")
     floor_lst, floor_level, point_lst = [], [], []
     segment_floor_df = df[df['pred_label']==label_dict['Floor']].reset_index(drop=True)
 
-    align_axis_floor_df = point_axis_align(segment_floor_df, np.array(parameters['SURVEY_BASIS']).T)  
-    cluster_dict_floor = cluster_floor_ceiling(align_axis_floor_df, parameters['EPS'], parameters['MIN_SAMPLES']) 
+    align_axis_floor_df = point_axis_align(segment_floor_df, np.array(parameters['SURVEY_BASIS']).T) 
 
+    cluster_dict_floor = cluster_floor_ceiling(
+        align_axis_floor_df,
+        parameters["EPS"],
+        parameters["MIN_SAMPLES"],
+        type='floor',
+        blobs=blobs,
+    )
+        
     floor_bboxz = [] 
     floor_id = 1
 
-    for num in cluster_dict_floor:
+    logger.info("Number of floor clusters: {}".format(len(cluster_dict_floor)))
+    for i, num in enumerate(cluster_dict_floor):
         df_points_colors = pd.DataFrame(cluster_dict_floor[num], columns=['x', 'y', 'z', 'r', 'g', 'b'])
 
-        bbox_zmin, bbox_zmax, corner_xyz = fit_ceiling_floor(df_points_colors, parameters['DIS_THR_F'], parameters['RANSAC_N_F'], parameters['NUM_ITER_F'], parameters['ALPHA_F'])
+        bbox_zmin, bbox_zmax, corner_xyz = fit_ceiling_floor(
+            df_points_colors, 
+            parameters['DIS_THR_F'], 
+            parameters['RANSAC_N_F'], 
+            parameters['NUM_ITER_F'], 
+            parameters['ALPHA_F'],
+            logger,
+            type='floor',
+            blobs=blobs,     # <- pass the factory (or None)
+            snapshot_idx=i+1,
+        )
+        
         floor_bboxz.append([bbox_zmin, bbox_zmax])
         
         rotated_corner = corner_xyz @ np.array(parameters['SURVEY_BASIS']).T
@@ -76,26 +106,49 @@ def run_floors(df, floors_path, parameters, output_json=False):
     "floors": floor_lst
     }
 
-    # Save to a file
-    if output_json:
-        with open(f"{floors_path}", "w") as f:
-            json.dump(floor_output_dict, f, indent=2)
+    # Upload json to blob storage
+    if blobs:
+        upload_dict_to_blob_json(floor_output_dict, blobs("floor_output.json"))
 
     return floor_output_dict, floor_bboxz, floor_level
-        
-def run_ceilings(df, ceilings_path, parameters, output_json=False):
-    print("Running ceiling post-processing...")
+
+def run_ceilings(df, parameters, logging_blob_location=None):
+    # ceiling_json_blob_client = None
+    blobs = None
+    if logging_blob_location:
+        log_blob_client = True
+        # ceiling_json_blob_client = True
+        blobs = setup_blob_clients(logging_blob_location)
+
+    logger.info("Running ceiling post-processing...")
     ceiling_lst, ceiling_level, point_lst = [], [], []   
     segment_ceiling_df = df[df['pred_label']==label_dict['Ceiling']].reset_index(drop=True)
     align_axis_ceiling_df = point_axis_align(segment_ceiling_df, np.array(parameters['SURVEY_BASIS']).T) 
-    cluster_dict_ceiling = cluster_floor_ceiling(align_axis_ceiling_df, parameters['EPS'], parameters['MIN_SAMPLES']) 
+    cluster_dict_ceiling = cluster_floor_ceiling(
+        align_axis_ceiling_df,
+        parameters["EPS"],
+        parameters["MIN_SAMPLES"],
+        type='ceiling',
+        blobs=blobs,
+    )
     ceiling_id = 1
-    level_id = 1
 
-    for num in cluster_dict_ceiling:
+    logger.info("Number of ceiling clusters: {}".format(len(cluster_dict_ceiling)))
+    for i, num in enumerate(cluster_dict_ceiling):
         # Convert NumPy array to DataFrame
         df_points_colors = pd.DataFrame(cluster_dict_ceiling[num], columns=['x', 'y', 'z', 'r', 'g', 'b'])
-        bbox_zmin, bbox_zmax, corner_xyz = fit_ceiling_floor(df_points_colors, parameters['DIS_THR_C'], parameters['RANSAC_N_C'], parameters['NUM_ITER_C'], parameters['ALPHA_C'])
+        bbox_zmin, bbox_zmax, corner_xyz = fit_ceiling_floor(
+            df_points_colors, 
+            parameters['DIS_THR_C'], 
+            parameters['RANSAC_N_C'], 
+            parameters['NUM_ITER_C'], 
+            parameters['ALPHA_C'],
+            logger,
+            type='ceiling',
+            blobs=blobs,     # <- pass the factory (or None)
+            snapshot_idx=i+1,
+        )
+
         rotated_corner = corner_xyz @ np.array(parameters['SURVEY_BASIS']).T
 
         cluster_xyz_arr = cluster_dict_ceiling[num][:, :3]
@@ -141,15 +194,20 @@ def run_ceilings(df, ceilings_path, parameters, output_json=False):
     "ceilings": ceiling_lst
     }
 
-    # Save to a file
-    if output_json:
-        with open(f"{ceilings_path}", "w") as f:
-            json.dump(ceiling_output_dict, f, indent=2)
+    # Upload json to blob storage
+    if blobs:
+        upload_dict_to_blob_json(ceiling_output_dict, blobs("ceiling_output.json"))
 
     return ceiling_output_dict, ceiling_level
 
-def run_walls(df, walls_path, parameters, floor_bboxz, line_seg_model, output_json=False):
-    print("Running wall post-processing...")
+def run_walls(df, parameters, floor_bboxz, line_seg_model, logging_blob_location=None):
+    blobs = None
+    if logging_blob_location:
+        # log_blob_client = True
+        # wall_json_blob_client = True
+        blobs = setup_blob_clients(logging_blob_location)
+
+    logger.info("Running wall post-processing...")
     wall_lst, point_lst = [], []
     num_level = len(floor_bboxz)  
     plane_arr = sorted_merged_floor_ceiling_plane(floor_bboxz)
@@ -163,6 +221,7 @@ def run_walls(df, walls_path, parameters, floor_bboxz, line_seg_model, output_js
     checkpoint = torch.load(line_seg_model, map_location=device)
     model = load_line_segmentation_model(checkpoint)
     wall_id = 1
+    
     for level in range(num_level):
         if level == num_level - 1:    
             z_min_floor = plane_arr[-1][1]
@@ -193,7 +252,11 @@ def run_walls(df, walls_path, parameters, floor_bboxz, line_seg_model, output_js
 
         points_xyz = [arr[:, :3] for arr in points_zrgb]
         points_rgb = [arr[:, 3:] for arr in points_zrgb]
-        bbox_minmax = extract_bbox_minmax(points_xyz)
+        bbox_minmax = extract_bbox_minmax(
+                    points_xyz, 
+                    blobs=blobs,
+                    snapshot_idx=level+1
+                    )
         edge_points = convert_to_edge_points(bbox_minmax)
 
         rotated_edge = [pts @ np.array(parameters['SURVEY_BASIS']).T for pts in edge_points]
@@ -233,14 +296,20 @@ def run_walls(df, walls_path, parameters, floor_bboxz, line_seg_model, output_js
     "walls": wall_lst
     }
 
-    # Save to a file
-    if output_json:
-        with open(f"{walls_path}", "w") as f:
-            json.dump(wall_output_dict, f, indent=2)
+    # Upload json to blob storage
+    if blobs:
+        upload_dict_to_blob_json(wall_output_dict, blobs("wall_output.json"))
 
     return wall_output_dict
 
-def final_output(floor_output, ceiling_output, wall_output, floor_level, ceiling_level, all_output_path, output_json=False):
+def final_output(floor_output, ceiling_output, wall_output, floor_level, ceiling_level, logging_blob_location=None):
+    blobs = None
+    if logging_blob_location:
+        # log_blob_client = True
+        # all_json_blob_client = True  
+        blobs = setup_blob_clients(logging_blob_location)
+        
+    logger.info("Compiling final output...")
     level_lst = []
     level_id = 1
     level = floor_level + ceiling_level
@@ -259,8 +328,8 @@ def final_output(floor_output, ceiling_output, wall_output, floor_level, ceiling
         "walls": wall_output["walls"]
     }
 
-    if output_json:
-        with open(all_output_path, "w") as f:
-            json.dump(final_output_dict, f, indent=2)
+    if blobs:
+        upload_logger_to_blob(logger, blobs("postprocess_log.txt"))
+        upload_dict_to_blob_json(final_output_dict, blobs("all_output.json"))
 
     return final_output_dict

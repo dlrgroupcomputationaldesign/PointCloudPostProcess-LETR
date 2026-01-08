@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "point-cloud-post-process"
-version = "0.4.1"
+version = "0.5.0"
 description = "Post process after PointNet inference on point cloud data."
 
 requires-python = ">=3.11"
@@ -19,7 +19,9 @@ dependencies = [
     "geopandas>=1.0.1",
     "shapely>=2.0.7",
     "pandas>=2.2.3",
-    "scipy>=1.10.0"
+    "scipy>=1.10.0",
+    "azure-storage-blob>=12.21.0",
+    "pydantic>=2.12.5"
 ]
 
 [tool.setuptools]

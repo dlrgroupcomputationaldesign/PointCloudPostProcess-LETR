@@ -5,10 +5,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import DBSCAN
 import alphashape
 import matplotlib.pyplot as plt
-from shapely.geometry import Point, LineString, Polygon
+from shapely.geometry import LineString
 from io import BytesIO
 from PIL import Image
 import cv2
+from .blob_util import upload_matplotlib_fig_to_blob, upload_snapshot_to_blob_from_u8, snapshot_png_bytes_visualizer
 
 def point_axis_align(df, survey_basis):
     xyz = df[['x', 'y', 'z']].values
@@ -20,36 +21,57 @@ def point_axis_align(df, survey_basis):
 
     return df_concate
 
-def cluster_floor_ceiling(df, eps, min_samples):
-    # Extract xyzrgb columns (x, y, z, r, g, b)
-    points = df[['x', 'y', 'z']].values
-    colors = df[['r', 'g', 'b']].values
-    colors_nor = df[['r', 'g', 'b']].values / 255.0  # Normalize RGB values to [0, 1]
+def df_to_pcd(df):
+    pts = df[["x", "y", "z"]].to_numpy()
+    col_u8 = df[["r", "g", "b"]].to_numpy()
+    col = col_u8 / 255.0
 
-    # Create Open3D point cloud
     pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    pcd.colors = o3d.utility.Vector3dVector(colors_nor)  # Assign RGB colors
-    o3d.visualization.draw_geometries([pcd])                                        # Visualize point cloud
+    pcd.points = o3d.utility.Vector3dVector(pts)
+    pcd.colors = o3d.utility.Vector3dVector(col)
+    return pcd, pts, col_u8, col
 
-    # Optionally: Normalize the features for DBSCAN (x, y, z, r, g, b)
-    features = np.hstack([points, colors_nor])  # Use x, y, z, r, g, b as features
-    scaler = StandardScaler()
-    features_scaled = scaler.fit_transform(features)
+def cluster_floor_ceiling(df, eps, min_samples, type, blobs=None, min_points=10000):
+    pcd, pts, col_u8, col = df_to_pcd(df)
 
-    # Perform DBSCAN clustering
-    dbscan = DBSCAN(eps=eps, min_samples=min_samples)  # Adjust parameters as needed
-    cluster_num = dbscan.fit_predict(features_scaled)
+    if blobs is not None:
+        snapshot_blob_client = blobs(f"{type}_cluster.png")
+        img_u8 = snapshot_png_bytes_visualizer([pcd], visible=False, view="cluster")
+        upload_snapshot_to_blob_from_u8(img_u8, snapshot_blob_client)
 
-    # Count the number of clusters (excluding noise points, labeled as -1)
-    unique_num, counts = np.unique(cluster_num, return_counts=True)
-    
-    # Exclude noise (-1) & number of points < 10000 from cluster count
-    cluster_dict = {label: np.hstack([points[cluster_num == label], colors[cluster_num == label]])for idx, label in enumerate(unique_num) if label != -1 and counts[idx] > 10000}
-            
+    feats = StandardScaler().fit_transform(np.hstack([pts, col]))  # xyz + rgb
+    labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(feats)
+
+    # build cluster dict (skip noise and small clusters)
+    cluster_dict = {}
+    for lab in np.unique(labels):
+        if lab == -1:
+            continue
+        m = labels == lab
+        if m.sum() <= min_points:
+            continue
+        cluster_dict[int(lab)] = np.hstack([pts[m], col_u8[m]])  # xyz + rgb(0-255)
     return cluster_dict
 
-def fit_ceiling_floor(df, distance_threshold, ransac_n, num_iterations, alpha_value):
+def fit_ceiling_floor(
+    df, 
+    distance_threshold, 
+    ransac_n, 
+    num_iterations, 
+    alpha_value, 
+    logger,
+    type='floor',
+    blobs=None,
+    snapshot_idx=None,
+    ):
+
+    # If caller provided blobs + index, build snapshot clients here (unless explicitly overridden)
+    if blobs is not None:
+        ransac_snapshot_blob_client = blobs(f"{type}_ransac_{snapshot_idx}.png")
+        planefit_snapshot_blob_client = blobs(f"{type}_planefit_{snapshot_idx}.png")
+        boundary_snapshot_blob_client = blobs(f"{type}_boundary_{snapshot_idx}.png")
+        edgepoints_snapshot_blob_client = blobs(f"{type}_edgepoints_{snapshot_idx}.png")
+
     # Extract XYZ and RGB columns
     xyz = df[['x', 'y', 'z']].values  # Point coordinates
     rgb = df[['r', 'g', 'b']].values / 255.0  # Normalize RGB values (0-1)
@@ -77,15 +99,22 @@ def fit_ceiling_floor(df, distance_threshold, ransac_n, num_iterations, alpha_va
     outlier_cloud.paint_uniform_color([0, 0, 1.0])  # Blue for non-plane
 
     # Visualize the result
-    o3d.visualization.draw_geometries([inlier_cloud, outlier_cloud], window_name="Plane Fitting")
-
+    # o3d.visualization.draw_geometries([inlier_cloud, outlier_cloud], window_name="Plane Fitting")
+    if ransac_snapshot_blob_client is not None:
+        img_u8 = snapshot_png_bytes_visualizer([inlier_cloud, outlier_cloud], visible=False, view="cluster")
+        upload_snapshot_to_blob_from_u8(img_u8, ransac_snapshot_blob_client)
+    
     centroid = np.mean(np.asarray(inlier_cloud.points), axis=0)
     # bbox = pcd.get_oriented_bounding_box()
     bbox = inlier_cloud.get_oriented_bounding_box()
     bbox.color = (0, 1, 0)  # Green box
     bbox_zmin = bbox.get_min_bound()[2]  # Compute the center
     bbox_zmax = bbox.get_max_bound()[2]
-    o3d.visualization.draw_geometries([inlier_cloud, bbox])
+
+    # o3d.visualization.draw_geometries([inlier_cloud, bbox])
+    if planefit_snapshot_blob_client is not None:
+        img_u8 = snapshot_png_bytes_visualizer([inlier_cloud, bbox], visible=False, view="cluster")
+        upload_snapshot_to_blob_from_u8(img_u8, planefit_snapshot_blob_client)
 
     floor_points = np.asarray(pcd.points)[inliers]
     floor_points_2d = floor_points[:, :2]
@@ -101,26 +130,27 @@ def fit_ceiling_floor(df, distance_threshold, ransac_n, num_iterations, alpha_va
     elif alpha_shape.geom_type == 'MultiPolygon':
         boundary_coords = max(alpha_shape.geoms, key=lambda p: p.area).exterior.coords
     else:
-        print("Alpha shape is not a Polygon or MultiPolygon.")
+        logger.info("Alpha shape is not a Polygon or MultiPolygon.")
         boundary_coords = []
 
     # Plot if boundary was found
     if boundary_coords:
         boundary_array = np.array(boundary_coords)
-        plt.figure()
-        plt.scatter(points[:, 0], points[:, 1], s=10, label='Floor Points')
-        plt.plot(boundary_array[:, 0], boundary_array[:, 1], 'r-', linewidth=2, label='Boundary')
-        plt.scatter(boundary_array[:, 0], boundary_array[:, 1], s=1, color='red', label='Corner Points')
-        plt.xlabel('X')
-        plt.ylabel('Y')
-        plt.title(f'Alpha Shape Boundary (alpha={alpha_value})')
-        plt.legend()
-        plt.grid(True)
-        plt.axis('equal')
-        plt.show()
-    else:
-        print("No valid boundary found.")
+        fig, ax = plt.subplots()
+        ax.scatter(points[:, 0], points[:, 1], s=10, label="Floor Points")
+        ax.plot(boundary_array[:, 0], boundary_array[:, 1], "r-", linewidth=2, label="Boundary")
+        ax.scatter(boundary_array[:, 0], boundary_array[:, 1], s=1, color="red", label="Corner Points")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_title(f"Alpha Shape Boundary (alpha={alpha_value})")
+        ax.legend()
+        ax.grid(True)
+        ax.axis("equal")
 
+        if boundary_snapshot_blob_client is not None:
+            upload_matplotlib_fig_to_blob(fig, boundary_snapshot_blob_client)
+    else:
+        logger.info("No valid boundary found.")
     
     line = LineString(boundary_coords)
     simplified = line.simplify(tolerance=0.8)  # tweak tolerance
@@ -133,24 +163,18 @@ def fit_ceiling_floor(df, distance_threshold, ransac_n, num_iterations, alpha_va
         extruded_coords.append([x, y, bbox_zmax])
 
     # Plot
+    fig, ax = plt.subplots()
     plt.scatter(points[:, 0], points[:, 1], s=1)
     plt.scatter(corner_coords[:, 0], corner_coords[:, 1], color="red", label="Corner Points")
     plt.title('Alpha Shape (Concave Hull)')
-    plt.show()
+
+    if edgepoints_snapshot_blob_client is not None:
+        upload_matplotlib_fig_to_blob(fig, edgepoints_snapshot_blob_client)
 
     return bbox_zmin, bbox_zmax, extruded_coords
 
 def sorted_merged_floor_ceiling_plane(bbox_arr):
-    sorted_data = sorted(bbox_arr, key=lambda x: x[1]) #sort by zmin
-    plane_arr = sorted_data
-    # Create the result array
-    # plane_arr = []
-    # i = 0
-    # while i < len(sorted_data):
-    #     current = sorted_data[i]
-    #     plane_arr.append([current[1], current[2]])
-    #     i += 1
-    # print('merged', plane_arr)
+    plane_arr = sorted(bbox_arr, key=lambda x: x[1]) #sort by zmin
     return plane_arr
 
 def points_between_level(bbox1, bbox2, xyzrgb):
@@ -174,9 +198,6 @@ def project_points_to_floor(filtered_points, bins):
 
     # Save plot to a BytesIO object
     img_bytes = BytesIO()
-    # Save figure without extra white space
-    # img_path = 'bridger.png'
-    # plt.savefig(img_path, bbox_inches='tight', pad_inches=0, dpi=300)
     plt.savefig(img_bytes, format='png', bbox_inches='tight', pad_inches=0, dpi=300)
     img_bytes.seek(0) 
     img = Image.open(img_bytes)

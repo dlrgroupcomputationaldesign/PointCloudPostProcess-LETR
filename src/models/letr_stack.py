@@ -68,6 +68,8 @@ class LETRstack(nn.Module):
         # layer 2 transformer
         hs2, memory, _ = self.transformer(src2, mask2, hs1[-1], pos[l2_num])
 
+        print(src2.device, mask2.device if mask2 is not None else None, hs1[-1].device, pos[l2_num].device)
+
         outputs_class = self.class_embed(hs2)
         outputs_coord = self.lines_embed(hs2).sigmoid()
         out = {}

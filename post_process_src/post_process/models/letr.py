@@ -318,7 +318,6 @@ def build(args):
     num_classes = 1
 
     device = torch.device(args.device)
-    print("Building LETR model...", device)
     
     backbone = build_backbone(args)
 

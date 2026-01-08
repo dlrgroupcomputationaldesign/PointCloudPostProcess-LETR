@@ -10,7 +10,7 @@ import geopandas as gpd
 from shapely.geometry import LineString, Polygon, MultiPolygon
 from shapely.ops import unary_union
 import open3d as o3d
-
+from .blob_util import upload_snapshot_to_blob_from_u8, snapshot_png_bytes_visualizer
 
 class Compose(object):
     def __init__(self, transforms):
@@ -81,7 +81,6 @@ class Resize(object):
     def __call__(self, img):
         size = self.sizes
         return resize(img, size, self.max_size)
-
 
 # Function to classify lines
 def classify_lines(lines, vertical_threshold, horizontal_threshold):
@@ -229,7 +228,6 @@ def img_process_model_input(image, RESIZE_WIDTH, INT_THR):
     img = normalize(color_image)
     inputs = nested_tensor_from_tensor_list([img])
     # plt.axis('off')
-    # plt.imshow(color_image)
 
     return inputs, orig_size, resize_ratio
 
@@ -265,7 +263,12 @@ def line_segmentation_inf(model, inputs, orig_size, image, resize_ratio, SCORE_T
     
     return polyhv_arr
 
-def extract_bbox_minmax(ori_find_z):
+def extract_bbox_minmax(
+        ori_find_z,
+        blobs=None,
+        snapshot_idx=None
+    ):
+
     # Generate distinct colors using a colormap
     cmap = plt.get_cmap("jet", len(ori_find_z))
     colors = [cmap(i)[:3] for i in range(len(ori_find_z))]  # Extract RGB values
@@ -289,7 +292,12 @@ def extract_bbox_minmax(ori_find_z):
         geometries.append(bbox)
 
     # Visualize everything
-    o3d.visualization.draw_geometries(geometries)
+    # o3d.visualization.draw_geometries(geometries)
+    if blobs is not None:
+        img_u8 = snapshot_png_bytes_visualizer(geometries, visible=False, view="bbox")
+        wall_bbox_snapshot_blob_client = blobs(f"wall_bbox_{snapshot_idx}.png")
+        upload_snapshot_to_blob_from_u8(img_u8, wall_bbox_snapshot_blob_client)
+
     return bbox_minmax
 
 def convert_to_edge_points(bboxes):
