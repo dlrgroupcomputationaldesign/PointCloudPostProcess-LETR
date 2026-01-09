@@ -10,7 +10,7 @@ import geopandas as gpd
 from shapely.geometry import LineString, Polygon, MultiPolygon
 from shapely.ops import unary_union
 import open3d as o3d
-from .blob_util import upload_snapshot_to_blob_from_u8, snapshot_png_bytes_visualizer
+from .blob_util import plot_clusters_with_aabbs_html_bytes, upload_html_bytes_to_blob
 
 class Compose(object):
     def __init__(self, transforms):
@@ -273,30 +273,32 @@ def extract_bbox_minmax(
     cmap = plt.get_cmap("jet", len(ori_find_z))
     colors = [cmap(i)[:3] for i in range(len(ori_find_z))]  # Extract RGB values
 
-    # List to hold Open3D geometries
-    geometries = []
+    clusters = []   # list of dicts: {"points": (Ni,3), "color": (3,), "min": (3,), "max": (3,)}
     bbox_minmax = []
-    # Process each point set
-    for i, points in enumerate(ori_find_z):
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points)
-        pcd.colors = o3d.utility.Vector3dVector(np.tile(colors[i], (points.shape[0], 1)))  # Assign color
-        geometries.append(pcd)
 
-        # Compute Axis-Aligned Bounding Box (AABB)
+    for i, points in enumerate(ori_find_z):
+        # points: (Ni, 3)
+        pts = np.asarray(points)
+
+        # Open3D only used here to compute AABB (optional; you can also do np.min/np.max)
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pts)
+
         bbox = pcd.get_axis_aligned_bounding_box()
-        bbox.color = (1, 0, 0)  # Green color for bounding box
-        min_bound = bbox.min_bound  # Minimum (x, y, z)
-        max_bound = bbox.max_bound 
+        min_bound = np.asarray(bbox.min_bound)
+        max_bound = np.asarray(bbox.max_bound)
+
+        color = np.asarray(colors[i])  # should be (3,) in [0,1] like Open3D
+
+        clusters.append({"points": pts, "color": color, "min": min_bound, "max": max_bound})
         bbox_minmax.append([min_bound, max_bound])
-        geometries.append(bbox)
 
     # Visualize everything
     # o3d.visualization.draw_geometries(geometries)
     if blobs is not None:
-        img_u8 = snapshot_png_bytes_visualizer(geometries, visible=False, view="bbox")
-        wall_bbox_snapshot_blob_client = blobs(f"wall_bbox_{snapshot_idx}.png")
-        upload_snapshot_to_blob_from_u8(img_u8, wall_bbox_snapshot_blob_client)
+        wall_bbox_snapshot_blob_client = blobs(f"wall_bbox_{snapshot_idx}.html")
+        html_bytes = plot_clusters_with_aabbs_html_bytes(clusters, point_size=2)
+        upload_html_bytes_to_blob(html_bytes, wall_bbox_snapshot_blob_client)
 
     return bbox_minmax
 

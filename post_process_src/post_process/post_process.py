@@ -22,7 +22,6 @@ def run_floors(df, parameters, logging_blob_location=None):
     blobs = None
     if logging_blob_location:
         log_blob_client = True
-        # floor_json_blob_client = True
         blobs = setup_blob_clients(logging_blob_location)
 
     logger.info("Running floor post-processing...")
@@ -113,11 +112,9 @@ def run_floors(df, parameters, logging_blob_location=None):
     return floor_output_dict, floor_bboxz, floor_level
 
 def run_ceilings(df, parameters, logging_blob_location=None):
-    # ceiling_json_blob_client = None
     blobs = None
     if logging_blob_location:
         log_blob_client = True
-        # ceiling_json_blob_client = True
         blobs = setup_blob_clients(logging_blob_location)
 
     logger.info("Running ceiling post-processing...")
@@ -203,8 +200,7 @@ def run_ceilings(df, parameters, logging_blob_location=None):
 def run_walls(df, parameters, floor_bboxz, line_seg_model, logging_blob_location=None):
     blobs = None
     if logging_blob_location:
-        # log_blob_client = True
-        # wall_json_blob_client = True
+        log_blob_client = True
         blobs = setup_blob_clients(logging_blob_location)
 
     logger.info("Running wall post-processing...")
@@ -305,8 +301,6 @@ def run_walls(df, parameters, floor_bboxz, line_seg_model, logging_blob_location
 def final_output(floor_output, ceiling_output, wall_output, floor_level, ceiling_level, logging_blob_location=None):
     blobs = None
     if logging_blob_location:
-        # log_blob_client = True
-        # all_json_blob_client = True  
         blobs = setup_blob_clients(logging_blob_location)
         
     logger.info("Compiling final output...")

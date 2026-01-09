@@ -9,7 +9,7 @@ from shapely.geometry import LineString
 from io import BytesIO
 from PIL import Image
 import cv2
-from .blob_util import upload_matplotlib_fig_to_blob, upload_snapshot_to_blob_from_u8, snapshot_png_bytes_visualizer
+from .blob_util import plot_inliers_with_obb_html_bytes, plot_plane_inliers_outliers_html_bytes, upload_html_bytes_to_blob, upload_matplotlib_fig_to_blob, snapshot_plotly_html_bytes
 
 def point_axis_align(df, survey_basis):
     xyz = df[['x', 'y', 'z']].values
@@ -21,23 +21,19 @@ def point_axis_align(df, survey_basis):
 
     return df_concate
 
-def df_to_pcd(df):
+def cluster_floor_ceiling(df, eps, min_samples, type, blobs=None, min_points=10000):
     pts = df[["x", "y", "z"]].to_numpy()
     col_u8 = df[["r", "g", "b"]].to_numpy()
     col = col_u8 / 255.0
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pts)
-    pcd.colors = o3d.utility.Vector3dVector(col)
-    return pcd, pts, col_u8, col
-
-def cluster_floor_ceiling(df, eps, min_samples, type, blobs=None, min_points=10000):
-    pcd, pts, col_u8, col = df_to_pcd(df)
-
     if blobs is not None:
-        snapshot_blob_client = blobs(f"{type}_cluster.png")
-        img_u8 = snapshot_png_bytes_visualizer([pcd], visible=False, view="cluster")
-        upload_snapshot_to_blob_from_u8(img_u8, snapshot_blob_client)
+        snapshot_blob_client = blobs(f"{type}_cluster.html")
+        snapshot_html_bytes = snapshot_plotly_html_bytes(
+                points_xyz=pts,
+                colors_rgb=col_u8,     # uint8 [0,255]
+                point_size=2,
+            )
+        upload_html_bytes_to_blob(snapshot_html_bytes, snapshot_blob_client)
 
     feats = StandardScaler().fit_transform(np.hstack([pts, col]))  # xyz + rgb
     labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(feats)
@@ -65,10 +61,15 @@ def fit_ceiling_floor(
     snapshot_idx=None,
     ):
 
+    ransac_snapshot_blob_client = None
+    planefit_snapshot_blob_client = None
+    boundary_snapshot_blob_client = None
+    edgepoints_snapshot_blob_client = None
+
     # If caller provided blobs + index, build snapshot clients here (unless explicitly overridden)
     if blobs is not None:
-        ransac_snapshot_blob_client = blobs(f"{type}_ransac_{snapshot_idx}.png")
-        planefit_snapshot_blob_client = blobs(f"{type}_planefit_{snapshot_idx}.png")
+        ransac_snapshot_blob_client = blobs(f"{type}_ransac_{snapshot_idx}.html")
+        planefit_snapshot_blob_client = blobs(f"{type}_planefit_{snapshot_idx}.html")
         boundary_snapshot_blob_client = blobs(f"{type}_boundary_{snapshot_idx}.png")
         edgepoints_snapshot_blob_client = blobs(f"{type}_edgepoints_{snapshot_idx}.png")
 
@@ -101,11 +102,19 @@ def fit_ceiling_floor(
     # Visualize the result
     # o3d.visualization.draw_geometries([inlier_cloud, outlier_cloud], window_name="Plane Fitting")
     if ransac_snapshot_blob_client is not None:
-        img_u8 = snapshot_png_bytes_visualizer([inlier_cloud, outlier_cloud], visible=False, view="cluster")
-        upload_snapshot_to_blob_from_u8(img_u8, ransac_snapshot_blob_client)
-    
+        pts = np.asarray(pcd.points)  # (N, 3)
+        inliers = np.asarray(inliers, dtype=int)
+        inlier_pts = pts[inliers]  # plane points
+        outlier_pts = np.delete(pts, inliers, axis=0)
+
+        snapshot_html_bytes = plot_plane_inliers_outliers_html_bytes(
+            inlier_pts,
+            outlier_pts,
+            point_size=2,
+        )
+        upload_html_bytes_to_blob(snapshot_html_bytes, ransac_snapshot_blob_client)
+
     centroid = np.mean(np.asarray(inlier_cloud.points), axis=0)
-    # bbox = pcd.get_oriented_bounding_box()
     bbox = inlier_cloud.get_oriented_bounding_box()
     bbox.color = (0, 1, 0)  # Green box
     bbox_zmin = bbox.get_min_bound()[2]  # Compute the center
@@ -113,8 +122,14 @@ def fit_ceiling_floor(
 
     # o3d.visualization.draw_geometries([inlier_cloud, bbox])
     if planefit_snapshot_blob_client is not None:
-        img_u8 = snapshot_png_bytes_visualizer([inlier_cloud, bbox], visible=False, view="cluster")
-        upload_snapshot_to_blob_from_u8(img_u8, planefit_snapshot_blob_client)
+        inlier_pts = np.asarray(inlier_cloud.points)  # (Ni, 3)
+
+        # Oriented bounding box from inliers
+        bbox = inlier_cloud.get_oriented_bounding_box()
+        bbox.color = (0, 1, 0)
+
+        html_bytes = plot_inliers_with_obb_html_bytes(inlier_pts, bbox, point_size=2)
+        upload_html_bytes_to_blob(html_bytes, planefit_snapshot_blob_client)
 
     floor_points = np.asarray(pcd.points)[inliers]
     floor_points_2d = floor_points[:, :2]
