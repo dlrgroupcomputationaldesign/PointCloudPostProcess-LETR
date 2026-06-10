@@ -1,10 +1,5 @@
 import pandas as pd
-import open3d as o3d
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import DBSCAN
-import alphashape
-import matplotlib.pyplot as plt
 from shapely.geometry import LineString
 from io import BytesIO
 from PIL import Image
@@ -22,6 +17,9 @@ def point_axis_align(df, survey_basis):
     return df_concate
 
 def cluster_floor_ceiling(df, eps, min_samples, type, blobs=None, min_points=10000):
+    from sklearn.cluster import DBSCAN
+    from sklearn.preprocessing import StandardScaler
+
     pts = df[["x", "y", "z"]].to_numpy()
     col_u8 = df[["r", "g", "b"]].to_numpy()
     col = col_u8 / 255.0
@@ -60,6 +58,9 @@ def fit_ceiling_floor(
     blobs=None,
     snapshot_idx=None,
     ):
+    import alphashape
+    import matplotlib.pyplot as plt
+    import open3d as o3d
 
     ransac_snapshot_blob_client = None
     planefit_snapshot_blob_client = None
@@ -200,6 +201,8 @@ def points_between_level(bbox1, bbox2, xyzrgb):
     return filtered_points
 
 def project_points_to_floor(filtered_points, bins):
+    import matplotlib.pyplot as plt
+
     # Project to XY plane (ignore Z)
     xy_projected = filtered_points[:, :2]  # Keep only x, y
     

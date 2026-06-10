@@ -4,12 +4,9 @@ import cv2
 import matplotlib.pyplot as plt
 import torchvision.transforms.functional as functional
 import torch.nn.functional as F
-from ..models import build_model
 from .misc import nested_tensor_from_tensor_list
-import geopandas as gpd
 from shapely.geometry import LineString, Polygon, MultiPolygon
 from shapely.ops import unary_union
-import open3d as o3d
 from .blob_util import plot_clusters_with_aabbs_html_bytes, upload_html_bytes_to_blob
 
 class Compose(object):
@@ -188,6 +185,8 @@ def find_zrgb(points, lookup):
     return np.hstack([points, out])
 
 def load_line_segmentation_model(checkpoint):
+    from ..models import build_model
+
     # load model
     args = checkpoint['args']
     model, _, postprocessors = build_model(args)
@@ -248,7 +247,10 @@ def line_segmentation_inf(model, inputs, orig_size, image, resize_ratio, SCORE_T
     lines = lines.reshape(lines.shape[0], -1)
 
     # Convert tensor to a list of LineStrings
-    lst_lines = gpd.GeoSeries([LineString([(x1, y1), (x2, y2)]) for x1, y1, x2, y2 in lines.detach().numpy()])
+    lst_lines = [
+        LineString([(x1, y1), (x2, y2)])
+        for x1, y1, x2, y2 in lines.detach().numpy()
+    ]
     
     # Classify lines
     vertical_lines, horizontal_lines = classify_lines(lst_lines, VERT_THR, HORI_THR)
@@ -268,6 +270,7 @@ def extract_bbox_minmax(
         blobs=None,
         snapshot_idx=None
     ):
+    import open3d as o3d
 
     # Generate distinct colors using a colormap
     cmap = plt.get_cmap("jet", len(ori_find_z))

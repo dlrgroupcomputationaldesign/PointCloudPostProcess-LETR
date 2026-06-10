@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "point-cloud-post-process"
-version = "0.5.1"
+version = "0.6.0"
 description = "Post process after PointNet inference on point cloud data."
 
 requires-python = ">=3.11"
@@ -34,6 +34,27 @@ where = ["post_process_src"]
 torch_cu121 = [
   "torch==2.2.2+cu121",
   "torchvision==0.17.2+cu121",
+]
+e57 = [
+  "pye57>=0.4.19",
+]
+las = [
+  "laspy>=2.0",
+]
+# Default opening detector: original IDEA-Research GroundingDINO package.
+# transformers must be pinned to 4.37 -- newer versions drop BertModel.get_head_mask,
+# which that package's text backbone calls. Install torch first (CUDA ops build
+# against it), e.g. the torch_cu121 extra.
+grounding_dino = [
+  "groundingdino @ git+https://github.com/IDEA-Research/GroundingDINO.git",
+  "transformers==4.37.2",
+]
+# Secondary detector: HuggingFace transformers port (self-contained, no get_head_mask).
+# Pinned <5: transformers 5.x crashes at import on some Windows/Store-Python setups
+# (importlib.metadata.packages_distributions -> OSError). 4.40+ has GroundingDINO.
+grounding_dino_hf = [
+  "transformers>=4.40,<5",
+  "pillow>=10.0.0",
 ]
 
 [project.urls]

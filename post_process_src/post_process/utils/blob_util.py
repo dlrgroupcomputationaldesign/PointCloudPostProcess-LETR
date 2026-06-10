@@ -1,11 +1,8 @@
 import numpy as np
 import json
 from pydantic.dataclasses import dataclass
-from azure.storage.blob import BlobServiceClient, ContentSettings
 import io
 import logging
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
 
 @dataclass
 class blob_config:
@@ -26,6 +23,8 @@ class InMemoryLogHandler(logging.Handler):
         return self.stream.getvalue()
 
 def setup_blob_clients(logging_blob_location):
+    from azure.storage.blob import BlobServiceClient
+
     blob_cfg = blob_config(**logging_blob_location)
 
     blob_service_client = BlobServiceClient(
@@ -62,6 +61,8 @@ def setup_logger_in_memory():
     return logger
 
 def upload_logger_to_blob(logger, log_blob_client):
+    from azure.storage.blob import ContentSettings
+
     mh = next(h for h in logger.handlers if isinstance(h, InMemoryLogHandler))
     log_blob_client.upload_blob(
         mh.get_text().encode("utf-8"),
@@ -75,6 +76,8 @@ def upload_dict_to_blob_json(
     indent=2,
     encoding="utf-8"
     ):
+    from azure.storage.blob import ContentSettings
+
     buf = io.StringIO()
     json.dump(data, buf, indent=indent)
     json_text = buf.getvalue()
@@ -88,6 +91,8 @@ def upload_dict_to_blob_json(
     )
 
 def snapshot_plotly_html_bytes(points_xyz, colors_rgb=None, point_size=2, camera=None):
+    import plotly.graph_objects as go
+
     x, y, z = points_xyz[:, 0], points_xyz[:, 1], points_xyz[:, 2]
 
     marker = {"size": point_size}
@@ -128,6 +133,7 @@ def plot_plane_inliers_outliers_html_bytes(
         point_size=2,
         camera=None,
     ):
+    import plotly.graph_objects as go
 
     fig = go.Figure()
 
@@ -198,6 +204,8 @@ def plot_inliers_with_obb_html_bytes(
         point_size=2,
         camera=None,
     ):
+    import plotly.graph_objects as go
+
     # OBB edges by corner index (12 edges total)
     edges = [
         (0, 1), (1, 3), (3, 2), (2, 0),  # bottom face
@@ -274,6 +282,8 @@ def aabb_edges_from_minmax(minb, maxb):
     return xs, ys, zs
 
 def plot_clusters_with_aabbs_html_bytes(clusters, point_size=2, camera=None, box_color_rgb=(255, 0, 0)):
+    import plotly.graph_objects as go
+
     fig = go.Figure()
 
     # Add clusters
@@ -315,13 +325,35 @@ def plot_clusters_with_aabbs_html_bytes(clusters, point_size=2, camera=None, box
     return fig.to_html(include_plotlyjs="cdn", full_html=True).encode("utf-8")
 
 def upload_html_bytes_to_blob(html_bytes, blob_client, overwrite=True):
+    from azure.storage.blob import ContentSettings
+
     blob_client.upload_blob(
         html_bytes,
         overwrite=overwrite,
         content_settings=ContentSettings(content_type="text/html; charset=utf-8"),
     )
 
+def upload_image_array_to_blob(image_rgb, blob_client, overwrite=True):
+    """PNG-encode an HxWx3 RGB uint8 array and upload it."""
+    import cv2
+    from azure.storage.blob import ContentSettings
+
+    bgr = cv2.cvtColor(np.ascontiguousarray(image_rgb), cv2.COLOR_RGB2BGR)
+    ok, buf = cv2.imencode(".png", bgr)
+    if not ok:
+        raise RuntimeError("Failed to PNG-encode image for blob upload")
+
+    blob_client.upload_blob(
+        buf.tobytes(),
+        overwrite=overwrite,
+        content_settings=ContentSettings(content_type="image/png"),
+    )
+
+
 def upload_matplotlib_fig_to_blob(fig, blob_client, dpi=200, overwrite=True):
+    import matplotlib.pyplot as plt
+    from azure.storage.blob import ContentSettings
+
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
     plt.close(fig)  # prevent memory leak in loops

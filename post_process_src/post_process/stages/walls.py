@@ -1,0 +1,195 @@
+import numpy as np
+from shapely.geometry import Point, Polygon
+
+from ..config import coerce_parameters
+from ..runtime import get_device, logger
+from ..utils.blob_util import upload_dict_to_blob_json
+from ..utils.floor_ceiling_util import (
+    point_axis_align,
+    points_between_level,
+    project_points_to_floor,
+    sorted_merged_floor_ceiling_plane,
+)
+from .common import make_blob_factory
+
+
+def run_walls(df, parameters, floor_bboxz, line_seg_model, logging_blob_location=None):
+    import torch
+
+    from ..utils.wall_seg_util import (
+        convert_to_edge_points,
+        extract_bbox_minmax,
+        find_zrgb,
+        img_process_model_input,
+        line_segmentation_inf,
+        load_line_segmentation_model,
+        pixel_to_xy,
+    )
+
+    parameters = coerce_parameters(parameters)
+    blobs = make_blob_factory(logging_blob_location)
+
+    logger.info("Running wall post-processing...")
+    wall_lst, point_lst = [], []
+    num_level = len(floor_bboxz)
+    plane_arr = sorted_merged_floor_ceiling_plane(floor_bboxz)
+
+    # Preserve current behavior: wall reconstruction projects all points between levels.
+    align_axis_df = point_axis_align(df, np.array(parameters["SURVEY_BASIS"]).T)
+    xyzrgb = align_axis_df[["x", "y", "z", "r", "g", "b"]].values
+
+    checkpoint = torch.load(line_seg_model, map_location=get_device())
+    model = load_line_segmentation_model(checkpoint)
+    wall_id = 1
+
+    for level in range(num_level):
+        if level == num_level - 1:
+            z_min_floor = plane_arr[-1][1]
+            filtered_points = xyzrgb[(xyzrgb[:, 2] > z_min_floor)]
+        else:
+            filtered_points = points_between_level(
+                plane_arr[level],
+                plane_arr[level + 1],
+                xyzrgb,
+            )
+
+        xy_projected, x_edges, y_edges, projected_img_arr = project_points_to_floor(
+            filtered_points,
+            parameters["PROJECTED_BINS"],
+        )
+        inputs, orig_size, resize_ratio = img_process_model_input(
+            projected_img_arr,
+            parameters["RESIZE_WIDTH"],
+            parameters["INT_THR"],
+        )
+        polyhv_arr = line_segmentation_inf(
+            model,
+            inputs,
+            orig_size,
+            projected_img_arr,
+            resize_ratio,
+            parameters["SCORE_THR"],
+            parameters["VERT_THR"],
+            parameters["HORI_THR"],
+            parameters["BUFFER_THR"],
+        )
+        img_width, img_height = projected_img_arr.shape[1], projected_img_arr.shape[0]
+        ori_poly = [
+            [
+                pixel_to_xy(
+                    x,
+                    img_height - y,
+                    x_edges,
+                    y_edges,
+                    img_width,
+                    img_height,
+                    parameters["PROJECTED_BINS"],
+                )
+                for y, x in poly
+            ]
+            for poly in polyhv_arr
+        ]
+        polygons = [Polygon(row) for row in ori_poly]
+
+        wall_segments = []
+        for poly in polygons:
+            inside_points = [
+                [point[0], point[1]]
+                for point in xy_projected
+                if poly.contains(Point(point))
+            ]
+            if inside_points:
+                wall_segments.append(
+                    {
+                        "polygon": poly,
+                        "inside_points": inside_points,
+                    }
+                )
+
+        lookup = {
+            (float(x), float(y)): filtered_points[i, 2:6]
+            for i, (x, y) in enumerate(filtered_points[:, :2])
+        }
+        pts_in_poly = [segment["inside_points"] for segment in wall_segments]
+        points_zrgb = [find_zrgb(np.array(poly), lookup) for poly in pts_in_poly]
+
+        points_xyz = [arr[:, :3] for arr in points_zrgb]
+        points_rgb = [arr[:, 3:] for arr in points_zrgb]
+        bbox_minmax = extract_bbox_minmax(
+            points_xyz,
+            blobs=blobs,
+            snapshot_idx=level + 1,
+        )
+        edge_points = convert_to_edge_points(bbox_minmax)
+
+        rotated_edge = [pts @ np.array(parameters["SURVEY_BASIS"]).T for pts in edge_points]
+        rotated_footprints = []
+        survey_basis_t = np.array(parameters["SURVEY_BASIS"]).T
+        for segment in wall_segments:
+            footprint_xy = np.asarray(segment["polygon"].exterior.coords[:-1], dtype=float)
+            footprint_xyz = np.column_stack(
+                (
+                    footprint_xy[:, 0],
+                    footprint_xy[:, 1],
+                    np.zeros(len(footprint_xy)),
+                )
+            )
+            rotated_footprint = footprint_xyz @ survey_basis_t
+            rotated_footprints.append(rotated_footprint[:, :2])
+
+        rotated_wall_xyz = [
+            pts @ np.array(parameters["SURVEY_BASIS"]).T for pts in points_xyz
+        ]
+        rotated_with_rgb = [
+            np.hstack((xyz, rgb)) for xyz, rgb in zip(rotated_wall_xyz, points_rgb)
+        ]
+
+        for i, bbox in enumerate(rotated_with_rgb):
+            for pt in bbox:
+                point_lst.append(
+                    {
+                        "category": "wall",
+                        "id": str(wall_id),
+                        "location": {
+                            "x": float(pt[0]),
+                            "y": float(pt[1]),
+                            "z": float(pt[2]),
+                        },
+                        "color": {
+                            "r": int(pt[3]),
+                            "g": int(pt[4]),
+                            "b": int(pt[5]),
+                        },
+                    }
+                )
+
+            wall_lst.append(
+                {
+                    "id": str(wall_id),
+                    "levelIndex": int(level),
+                    "zRange": {
+                        "min": float(np.min(rotated_edge[i][:, 2])),
+                        "max": float(np.max(rotated_edge[i][:, 2])),
+                    },
+                    "footprint": [
+                        {"x": float(x), "y": float(y)}
+                        for x, y in rotated_footprints[i]
+                    ],
+                    "bbox": [
+                        {"x": float(x), "y": float(y), "z": float(z)}
+                        for x, y, z in rotated_edge[i]
+                    ],
+                }
+            )
+
+            wall_id += 1
+
+    wall_output_dict = {
+        "points": point_lst,
+        "walls": wall_lst,
+    }
+
+    if blobs:
+        upload_dict_to_blob_json(wall_output_dict, blobs("wall_output.json"))
+
+    return wall_output_dict
