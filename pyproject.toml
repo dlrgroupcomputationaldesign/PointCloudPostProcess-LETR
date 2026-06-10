@@ -41,15 +41,17 @@ e57 = [
 las = [
   "laspy>=2.0",
 ]
-# Default opening detector: original IDEA-Research GroundingDINO package.
-# transformers must be pinned to 4.37 -- newer versions drop BertModel.get_head_mask,
-# which that package's text backbone calls. Install torch first (CUDA ops build
-# against it), e.g. the torch_cu121 extra.
+# Original IDEA-Research GroundingDINO backend (OPENING_DETECTOR="grounding_dino").
+# The groundingdino package is NOT listed here on purpose: its setup.py imports torch
+# at build time, so it only installs with build isolation disabled, and it needs a
+# CUDA toolkit (nvcc) to compile its op. Install it manually after torch:
+#   pip install --no-build-isolation "git+https://github.com/IDEA-Research/GroundingDINO.git"
+# transformers is pinned to 4.37 -- newer versions drop BertModel.get_head_mask,
+# which that package's text backbone calls.
 grounding_dino = [
-  "groundingdino @ git+https://github.com/IDEA-Research/GroundingDINO.git",
   "transformers==4.37.2",
 ]
-# Secondary detector: HuggingFace transformers port (self-contained, no get_head_mask).
+# Default opening detector: HuggingFace transformers port (self-contained, no CUDA build).
 # Pinned <5: transformers 5.x crashes at import on some Windows/Store-Python setups
 # (importlib.metadata.packages_distributions -> OSError). 4.40+ has GroundingDINO.
 grounding_dino_hf = [

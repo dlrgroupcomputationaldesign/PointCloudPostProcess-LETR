@@ -46,15 +46,15 @@ def test_config_exposes_opening_parameters():
         "OPENING_MIN_WIDTH",
     ):
         assert key in params
-    assert params["OPENING_DETECTOR"] == "grounding_dino"
+    assert params["OPENING_DETECTOR"] == "grounding_dino_hf"
 
 
 def test_registry_resolves_both_backends_lazily():
     params = PostProcessConfig().to_parameters()
-    assert type(build_detector(params)).__name__ == "GroundingDinoDetector"
+    assert type(build_detector(params)).__name__ == "GroundingDinoHFDetector"
 
-    hf = dict(params, OPENING_DETECTOR="grounding_dino_hf")
-    assert type(build_detector(hf)).__name__ == "GroundingDinoHFDetector"
+    original = dict(params, OPENING_DETECTOR="grounding_dino")
+    assert type(build_detector(original)).__name__ == "GroundingDinoDetector"
 
 
 def test_registry_rejects_unknown_detector():

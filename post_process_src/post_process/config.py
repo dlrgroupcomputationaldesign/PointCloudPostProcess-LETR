@@ -46,9 +46,9 @@ class OpeningConfig:
     enabled: bool = False
 
     # Detector selection (resolved by detectors.registry.build_detector).
-    # "grounding_dino"     -> original IDEA-Research package (default, transformers==4.37)
-    # "grounding_dino_hf"  -> HuggingFace transformers port (transformers>=4.40)
-    detector: str = "grounding_dino"
+    # "grounding_dino_hf"  -> HuggingFace transformers port (default; no CUDA build)
+    # "grounding_dino"     -> original IDEA-Research package (needs CUDA toolkit + --no-build-isolation)
+    detector: str = "grounding_dino_hf"
     gd_text_prompt: str = "opening . door . window ."
     gd_box_threshold: float = 0.35
     gd_text_threshold: float = 0.25
