@@ -89,14 +89,14 @@ class OpeningConfig:
     dense_source_path: str | None = None
     dense_wall_ids: Sequence[str] | None = None
     dense_wall_margin: float = 0.25  # metres (MARGIN_M)
-    e57_chunk_size: int = 2_000_000  # CHUNK_SIZE
+    point_cloud_chunk_size: int = 2_000_000  # CHUNK_SIZE
     # Native-units-per-meter (3.2808 for feet, 1.0 for meters). Also drives the
     # meters->native conversion for image_bin_m and the size filters above.
-    e57_to_csv_scale: float = 3.280839895013123
+    point_cloud_to_post_processing_scale: float = 3.280839895013123
     # E57->CSV translation. If annotation_csv_path is set, the offset is computed
     # as xyz_min_ft * (1/scale) like the experiment; otherwise this explicit value
     # (or the E57 header min) is used.
-    e57_to_csv_offset: Sequence[float] | None = None
+    point_cloud_to_csv_offset: Sequence[float] | None = None
     annotation_csv_path: str | None = None
     annotation_chunk_size: int = 500_000  # ANNOTATION_CHUNK_SIZE
 
@@ -167,11 +167,11 @@ class PostProcessConfig:
                 else None
             ),
             "OPENING_DENSE_WALL_MARGIN": self.openings.dense_wall_margin,
-            "OPENING_E57_CHUNK_SIZE": self.openings.e57_chunk_size,
-            "OPENING_E57_TO_CSV_SCALE": self.openings.e57_to_csv_scale,
-            "OPENING_E57_TO_CSV_OFFSET": (
-                list(self.openings.e57_to_csv_offset)
-                if self.openings.e57_to_csv_offset is not None
+            "OPENING_POINT_CLOUD_CHUNK_SIZE": self.openings.point_cloud_chunk_size,
+            "POINT_CLOUD_TO_POST_PROCESSING_SCALE": self.openings.point_cloud_to_post_processing_scale,
+            "OPENING_POINT_CLOUD_TO_CSV_OFFSET": (
+                list(self.openings.point_cloud_to_csv_offset)
+                if self.openings.point_cloud_to_csv_offset is not None
                 else None
             ),
             "OPENING_ANNOTATION_CSV_PATH": self.openings.annotation_csv_path,

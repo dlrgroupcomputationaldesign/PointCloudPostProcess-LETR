@@ -42,7 +42,7 @@ def test_config_exposes_opening_parameters():
         "OPENING_DETECTOR",
         "OPENING_GD_WEIGHTS_PATH",
         "OPENING_IMAGE_BIN_M",
-        "OPENING_E57_TO_CSV_SCALE",
+        "POINT_CLOUD_TO_POST_PROCESSING_SCALE",
         "OPENING_MIN_WIDTH",
     ):
         assert key in params
@@ -65,7 +65,7 @@ def test_registry_rejects_unknown_detector():
 def test_fine_grid_dims_then_block_sum_to_render():
     # 4 m x 3 m. Fine bin 0.025 -> 120 x 160 cells; block-sum factor 2 -> 60 x 80.
     params = PostProcessConfig().to_parameters()
-    params["OPENING_E57_TO_CSV_SCALE"] = 1.0  # treat wall coords as metres
+    params["POINT_CLOUD_TO_POST_PROCESSING_SCALE"] = 1.0  # treat wall coords as metres
     frame = op._wall_frame(_axis_aligned_wall())
     fine = op._empty_count_grid(frame, params)
     assert fine.shape == (120, 160)
@@ -76,7 +76,7 @@ def test_fine_grid_dims_then_block_sum_to_render():
 
 def test_render_produces_upscaled_rgb():
     params = PostProcessConfig().to_parameters()
-    params["OPENING_E57_TO_CSV_SCALE"] = 1.0
+    params["POINT_CLOUD_TO_POST_PROCESSING_SCALE"] = 1.0
     render = np.zeros((60, 80), dtype=np.uint32)
     render[10:20, 30:50] = 5  # some occupied render cells
     img = render_log_image(render, params)
@@ -87,7 +87,7 @@ def test_render_produces_upscaled_rgb():
 
 def test_box_maps_back_to_expected_3d_span():
     params = PostProcessConfig().to_parameters()
-    params["OPENING_E57_TO_CSV_SCALE"] = 1.0
+    params["POINT_CLOUD_TO_POST_PROCESSING_SCALE"] = 1.0
     wall = _axis_aligned_wall()
     frame = op._wall_frame(wall)
     fine = op._empty_count_grid(frame, params)
@@ -128,7 +128,7 @@ def test_run_openings_dense_npy_with_model_and_offset(tmp_path):
     np.save(npy_path, pts)
 
     params = PostProcessConfig().to_parameters()
-    params["OPENING_E57_TO_CSV_SCALE"] = 1.0
+    params["POINT_CLOUD_TO_POST_PROCESSING_SCALE"] = 1.0
     params["OPENING_LOCAL_OUTPUT_DIR"] = str(tmp_path / "out")
 
     captured = {}
@@ -167,9 +167,49 @@ def test_run_openings_dense_npy_with_model_and_offset(tmp_path):
     assert (tmp_path / "out" / "wall_1_detected.png").exists()
 
 
+def test_to_original_coordinates_inverts_scale_and_shift():
+    from post_process.utils.coordinate_util import to_original_coordinates
+
+    scale, offset = 2.0, [10.0, 20.0, 5.0]
+
+    def to_post(o):  # forward transform the package applies: post = orig*scale - offset
+        return [o[0] * scale - offset[0], o[1] * scale - offset[1], o[2] * scale - offset[2]]
+
+    px, py, pz = to_post([3.0, 4.0, 1.0])
+    combined = {
+        "points": [{"location": {"x": px, "y": py, "z": pz}}],
+        "floors": [{"edgePoints": [{"x": px, "y": py, "z": pz}]}],
+        "ceilings": [{"edgePoints": [{"x": px, "y": py, "z": pz}]}],
+        "walls": [{
+            "bbox": [{"x": px, "y": py, "z": pz}],
+            "footprint": [{"x": px, "y": py}],
+            "zRange": {"min": pz, "max": pz},
+        }],
+        "levels": [{"id": "1", "zMode": pz}],
+        "doors": [{
+            "bbox": [{"x": px, "y": py, "z": pz}],
+            "bottomZ": pz, "topZ": pz,
+            "width": 1.0 * scale, "height": 2.0 * scale,  # lengths invert as /scale
+        }],
+    }
+
+    out = to_original_coordinates(combined, scale, offset)
+    loc = out["points"][0]["location"]
+    assert (loc["x"], loc["y"], loc["z"]) == pytest.approx((3.0, 4.0, 1.0))
+    assert out["walls"][0]["footprint"][0]["x"] == pytest.approx(3.0)
+    assert out["walls"][0]["zRange"]["max"] == pytest.approx(1.0)
+    assert out["levels"][0]["zMode"] == pytest.approx(1.0)
+    door = out["doors"][0]
+    assert door["bottomZ"] == pytest.approx(1.0)
+    assert door["width"] == pytest.approx(1.0)
+    assert door["height"] == pytest.approx(2.0)
+    # input dict not mutated (deep copy)
+    assert combined["levels"][0]["zMode"] == pz
+
+
 def test_box_to_grid_span_inverts_flip_and_cell_px():
     params = PostProcessConfig().to_parameters()
-    params["OPENING_E57_TO_CSV_SCALE"] = 1.0
+    params["POINT_CLOUD_TO_POST_PROCESSING_SCALE"] = 1.0
     frame = op._wall_frame(_axis_aligned_wall())
     fine = op._empty_count_grid(frame, params)
     n_z, n_s = downsample_sum(fine, op._render_bin_factor(params)).shape

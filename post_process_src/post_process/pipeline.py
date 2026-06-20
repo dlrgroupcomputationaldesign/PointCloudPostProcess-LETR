@@ -35,15 +35,15 @@ def run_post_process(
         logging_blob_location=logging_blob_location,
     )
 
-    # with open('wall_output.pickle', 'wb') as f:
-    #     pickle.dump(wall_output, f)
-                
     opening_output = None
     if include_openings or parameters.get("OPENINGS_ENABLED", False):
         opening_output = run_openings(
             df,
             parameters,
             wall_output,
+            point_cloud_path=None,
+            xyz_offset=None,
+            opening_detection_model=None,
             logging_blob_location=logging_blob_location,
         )
 

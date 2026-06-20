@@ -119,13 +119,13 @@ def _candidate_bbox(frame, s_min, s_max, z_min, z_max):
 # Unit handling
 #
 # wall_output geometry is in the CSV's native units (feet for these datasets);
-# OPENING_E57_TO_CSV_SCALE is the native-units-per-meter factor (3.2808 for feet,
+# POINT_CLOUD_TO_POST_PROCESSING_SCALE is the native-units-per-meter factor (3.2808 for feet,
 # 1.0 for meter data). Physical parameters -- the image bin size and the
 # width/height filters -- are expressed in METERS and converted to native units
 # here, so the rendered grid matches the meter-binned images the detector expects.
 # ---------------------------------------------------------------------------
 def _units_per_meter(parameters):
-    return float(parameters["OPENING_E57_TO_CSV_SCALE"])
+    return float(parameters["POINT_CLOUD_TO_POST_PROCESSING_SCALE"])
 
 
 def _fine_bin_size(parameters):
@@ -441,9 +441,9 @@ def _resolve_e57_offset(parameters):
 
     With the ``original * scale - offset`` transform, the offset is the min of the
     already-scaled (feet) coordinates -- i.e. the annotation cloud's xyz min. Used
-    only when neither xyz_offset nor OPENING_E57_TO_CSV_OFFSET was supplied.
+    only when neither xyz_offset nor OPENING_POINT_CLOUD_TO_CSV_OFFSET was supplied.
     """
-    if parameters.get("OPENING_E57_TO_CSV_OFFSET") is not None:
+    if parameters.get("OPENING_POINT_CLOUD_TO_CSV_OFFSET") is not None:
         return parameters
     if not parameters.get("OPENING_ANNOTATION_CSV_PATH"):
         return parameters
@@ -456,7 +456,7 @@ def _resolve_e57_offset(parameters):
         )
     )
     parameters = dict(parameters)
-    parameters["OPENING_E57_TO_CSV_OFFSET"] = offset
+    parameters["OPENING_POINT_CLOUD_TO_CSV_OFFSET"] = offset
     return parameters
 
 
@@ -466,11 +466,11 @@ def _to_wall_frame(points_xyz, parameters):
     Reproduces the preprocessing transform that produced the walls: the cloud is
     scaled (e.g. metres -> feet) then shifted to the origin, i.e.
     ``wall_coords = original * scale - xyz_offset``. ``scale`` comes from
-    OPENING_E57_TO_CSV_SCALE and ``xyz_offset`` from OPENING_E57_TO_CSV_OFFSET
+    POINT_CLOUD_TO_POST_PROCESSING_SCALE and ``xyz_offset`` from POINT_CLOUD_TO_POST_PROCESSING_OFFSET
     (set from the caller's xyz_offset, or the annotation min, or 0).
     """
-    scale = float(parameters["OPENING_E57_TO_CSV_SCALE"])
-    offset = parameters.get("OPENING_E57_TO_CSV_OFFSET")
+    scale = float(parameters["POINT_CLOUD_TO_POST_PROCESSING_SCALE"])
+    offset = parameters.get("OPENING_POINT_CLOUD_TO_CSV_OFFSET")
     offset = np.zeros(3) if offset is None else np.asarray(offset, dtype=float)
     return points_xyz.astype(float, copy=False) * scale - offset
 
@@ -529,7 +529,7 @@ def _iter_dense_chunks(path, parameters):
     import os
 
     ext = os.path.splitext(str(path))[1].lower()
-    chunk_size = int(parameters["OPENING_E57_CHUNK_SIZE"])
+    chunk_size = int(parameters["OPENING_POINT_CLOUD_CHUNK_SIZE"])
 
     if ext == ".e57":
         yield from _iter_e57_raw_chunks(path, chunk_size)
@@ -631,8 +631,8 @@ def run_openings(
             Falls back to ``OPENING_DENSE_SOURCE_PATH``; if neither, uses ``df``.
         xyz_offset: the shift applied during preprocessing, so the dense cloud is
             mapped to the wall frame as ``original * scale - xyz_offset``
-            (scale = OPENING_E57_TO_CSV_SCALE). If None, falls back to an explicit
-            OPENING_E57_TO_CSV_OFFSET or an annotation CSV.
+            (scale = POINT_CLOUD_TO_POST_PROCESSING_SCALE). If None, falls back to an explicit
+            OPENING_POINT_CLOUD_TO_CSV_OFFSET or an annotation CSV.
         opening_detection_model: path/id of the detector weights/model; injected
             so ``build_detector`` loads it.
         logging_blob_location: blob target for images/JSON; when None, images go
@@ -646,7 +646,7 @@ def run_openings(
         overrides["OPENING_GD_WEIGHTS_PATH"] = opening_detection_model
         overrides["OPENING_GD_MODEL_ID"] = opening_detection_model
     if xyz_offset is not None:
-        overrides["OPENING_E57_TO_CSV_OFFSET"] = list(xyz_offset)
+        overrides["OPENING_POINT_CLOUD_TO_CSV_OFFSET"] = list(xyz_offset)
     if overrides:
         parameters = {**parameters, **overrides}
 
@@ -667,11 +667,12 @@ def run_openings(
     dense_path = point_cloud_path or parameters.get("OPENING_DENSE_SOURCE_PATH")
     if dense_path:
         # Align the dense cloud to the walls (xyz_offset, explicit offset, or annotation).
-        if parameters.get("OPENING_E57_TO_CSV_OFFSET") is None:
+        if parameters.get("OPENING_POINT_CLOUD_TO_CSV_OFFSET") is None:
             parameters = _resolve_e57_offset(parameters)
-        if parameters.get("OPENING_E57_TO_CSV_OFFSET") is None:
+            print('minxyz', parameters)
+        if parameters.get("OPENING_POINT_CLOUD_TO_CSV_OFFSET") is None:
             logger.warning(
-                "No xyz_offset / OPENING_E57_TO_CSV_OFFSET / annotation given; the "
+                "No xyz_offset / OPENING_POINT_CLOUD_TO_CSV_OFFSET / annotation given; the "
                 "dense cloud may be misaligned with the walls."
             )
         # Crop margin is physical (metres); the crop geometry is in native units.
