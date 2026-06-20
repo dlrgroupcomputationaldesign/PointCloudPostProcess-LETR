@@ -16,6 +16,7 @@ _LAZY_EXPORTS = {
     "run_post_process": ".pipeline",
     "run_walls": ".stages.walls",
     "to_original_coordinates": ".utils.coordinate_util",
+    "to_original_coordinates_all": ".utils.coordinate_util",
 }
 
 
@@ -49,4 +50,5 @@ __all__ = [
     "run_post_process",
     "run_walls",
     "to_original_coordinates",
+    "to_original_coordinates_all",
 ]

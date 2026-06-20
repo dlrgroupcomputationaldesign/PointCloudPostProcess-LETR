@@ -207,6 +207,23 @@ def test_to_original_coordinates_inverts_scale_and_shift():
     assert combined["levels"][0]["zMode"] == pz
 
 
+def test_to_original_coordinates_all_handles_many_and_none():
+    from post_process.utils.coordinate_util import to_original_coordinates_all
+
+    scale, offset = 2.0, [10.0, 20.0, 5.0]
+    wall_output = {"walls": [{"bbox": [{"x": 4.0, "y": 0.0, "z": 2.0}]}]}
+    floor_output = {"points": [{"location": {"x": 4.0, "y": 0.0, "z": 2.0}}]}
+
+    floor_o, wall_o, opening_o = to_original_coordinates_all(
+        floor_output, wall_output, None, scale=scale, offset=offset
+    )
+    assert opening_o is None  # None passes through
+    assert wall_o["walls"][0]["bbox"][0]["x"] == pytest.approx((4.0 + 10.0) / 2.0)
+    assert floor_o["points"][0]["location"]["z"] == pytest.approx((2.0 + 5.0) / 2.0)
+    # originals untouched
+    assert wall_output["walls"][0]["bbox"][0]["x"] == 4.0
+
+
 def test_box_to_grid_span_inverts_flip_and_cell_px():
     params = PostProcessConfig().to_parameters()
     params["POINT_CLOUD_TO_POST_PROCESSING_SCALE"] = 1.0

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "point-cloud-post-process"
-version = "0.6.1"
+version = "0.6.2"
 description = "Post process after PointNet inference on point cloud data."
 
 requires-python = ">=3.11"

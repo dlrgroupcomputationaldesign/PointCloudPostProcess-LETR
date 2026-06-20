@@ -14,9 +14,11 @@ cloud's coordinates:
 It walks the combined ``final_output`` dict as well as the individual stage
 dicts (floors / ceilings / walls / openings); only the keys present are touched.
 
-Note: this inverts the preprocessing scale + shift only. It assumes the output
-shares the original cloud's orientation (true when SURVEY_BASIS is the identity);
-a non-identity survey rotation would also need to be inverted here.
+Only the preprocessing scale + shift are inverted -- no rotation. The stages
+rotate into an axis-aligned frame (``@ SURVEY_BASIS``) for their geometry and
+rotate straight back out (``@ SURVEY_BASIS.T``), so every output is already in
+the input cloud's frame (``original * scale - offset``). The net rotation is the
+identity for any orthonormal SURVEY_BASIS, so it does not need undoing here.
 """
 
 import copy
@@ -96,3 +98,21 @@ def to_original_coordinates(output, scale, offset):
                 element["height"] = to_length(element["height"])
 
     return data
+
+
+def to_original_coordinates_all(*outputs, scale, offset):
+    """Convert several post-process output dicts to original coordinates at once.
+
+    Returns a tuple of converted dicts in the same order. ``None`` entries pass
+    through unchanged, so an optional ``opening_output`` can be included.
+    ``scale`` and ``offset`` are keyword-only to keep the call unambiguous::
+
+        floor_o, ceiling_o, wall_o, opening_o = to_original_coordinates_all(
+            floor_output, ceiling_output, wall_output, opening_output,
+            scale=scale, offset=offset,
+        )
+    """
+    return tuple(
+        None if output is None else to_original_coordinates(output, scale, offset)
+        for output in outputs
+    )
