@@ -162,6 +162,13 @@ def test_run_openings_dense_npy_with_model_and_offset(tmp_path):
     # produced the expected output structure
     assert set(out) == {"points", "doors", "windows", "openings"}
     assert len(out["doors"]) == 1
+    # points inside the detected box were collected and tagged to the door
+    assert out["points"], "expected collected points inside the opening box"
+    door_id = out["doors"][0]["id"]
+    for p in out["points"]:
+        assert p["category"] == "door"
+        assert p["id"] == door_id
+        assert {"x", "y", "z"} <= set(p["location"])
     # images written locally
     assert (tmp_path / "out" / "wall_1_log.png").exists()
     assert (tmp_path / "out" / "wall_1_detected.png").exists()

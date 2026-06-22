@@ -67,6 +67,12 @@ class OpeningConfig:
     max_height: float = 4.0
     min_wall_points: int = 200
 
+    # Attach the cloud points inside each detected opening's box to the output
+    # (like floor/wall points). The per-wall point buffer is reservoir-capped to
+    # bound memory; set collect_points False to skip it on very large clouds.
+    collect_points: bool = True
+    max_collected_points_per_wall: int = 300_000
+
     # Log-density image rendering (see utils.opening_image_util). image_bin_m is in
     # METRES; wall geometry is in native CSV units (feet here), so it is converted
     # via e57_to_csv_scale (which doubles as the native-units-per-meter factor).
@@ -151,6 +157,8 @@ class PostProcessConfig:
             "OPENING_MIN_HEIGHT": self.openings.min_height,
             "OPENING_MAX_HEIGHT": self.openings.max_height,
             "OPENING_MIN_WALL_POINTS": self.openings.min_wall_points,
+            "OPENING_COLLECT_POINTS": self.openings.collect_points,
+            "OPENING_MAX_COLLECTED_POINTS_PER_WALL": self.openings.max_collected_points_per_wall,
             "OPENING_IMAGE_BIN_M": self.openings.image_bin_m,
             "OPENING_IMAGE_FINE_BIN_M": self.openings.image_fine_bin_m,
             "OPENING_IMAGE_CELL_PX": self.openings.image_cell_px,

@@ -148,8 +148,25 @@ def _empty_count_grid(frame, parameters):
     return np.zeros((n_z, n_s), dtype=np.uint32)
 
 
-def _accumulate_counts(counts, frame, points_xyz, parameters):
-    """Bin points that fall on this wall into its fine (z, s) count grid."""
+def _reservoir_extend(collector, new_points, cap):
+    """Append points to a per-wall buffer, capped by uniform subsampling."""
+    if not len(new_points):
+        return
+    collector["chunks"].append(new_points)
+    collector["n"] += len(new_points)
+    if cap and collector["n"] > 2 * cap:
+        merged = np.concatenate(collector["chunks"])
+        idx = np.random.default_rng(0).choice(merged.shape[0], cap, replace=False)
+        collector["chunks"] = [merged[idx]]
+        collector["n"] = cap
+
+
+def _accumulate_counts(counts, frame, points_xyz, parameters, collector=None):
+    """Bin points that fall on this wall into its fine (z, s) count grid.
+
+    When ``collector`` is given, the wall-plane points are also retained (capped)
+    so points inside detected openings can be emitted later.
+    """
     if points_xyz.size == 0:
         return 0
 
@@ -165,6 +182,13 @@ def _accumulate_counts(counts, frame, points_xyz, parameters):
     )
     if not np.any(wall_mask):
         return 0
+
+    if collector is not None:
+        _reservoir_extend(
+            collector,
+            points_xyz[wall_mask],
+            int(parameters["OPENING_MAX_COLLECTED_POINTS_PER_WALL"]),
+        )
 
     s = s[wall_mask]
     z = z[wall_mask]
@@ -223,6 +247,8 @@ def _detection_to_candidate(detection, wall, frame, n_z, n_s, parameters):
         "height": float(height),
         "bottomZ": float(z_min),
         "topZ": float(z_max),
+        # (s, z) span in the wall frame, used to gather points then popped.
+        "_span": (s_min, s_max, z_min, z_max),
     }
 
 
@@ -274,7 +300,31 @@ def _write_output_json(data, name, blobs, parameters):
             json.dump(data, handle, indent=2)
 
 
-def _detect_wall(wall, frame, counts, point_count, detector, parameters, image_sink):
+def _collect_candidate_points(candidates, frame, collector):
+    """Attach the retained wall points that fall inside each candidate's (s,z) span.
+
+    The retained points already passed the wall-plane (t) and z band during
+    accumulation, so only the candidate's (s, z) extent is applied here.
+    """
+    if collector is None or not candidates:
+        return
+
+    pts = np.concatenate(collector["chunks"]) if collector["chunks"] else np.empty((0, 3))
+    if not len(pts):
+        for candidate in candidates:
+            candidate["_points"] = []
+        return
+
+    s, _t, z = _project_points(pts, frame)
+    for candidate in candidates:
+        s_min, s_max, z_min, z_max = candidate["_span"]
+        mask = (s >= s_min) & (s <= s_max) & (z >= z_min) & (z <= z_max)
+        candidate["_points"] = [
+            {"x": float(p[0]), "y": float(p[1]), "z": float(p[2])} for p in pts[mask]
+        ]
+
+
+def _detect_wall(wall, frame, counts, point_count, detector, parameters, image_sink, collector=None):
     """Render -> detect -> map for a single wall, writing both images via image_sink.
 
     ``counts`` is the FINE histogram; it is block-summed to the render bin first,
@@ -313,6 +363,8 @@ def _detect_wall(wall, frame, counts, point_count, detector, parameters, image_s
     if image_sink:
         annotated = annotate_detections(image_rgb, annotations)
         image_sink("opening/wall_{}_detected.png".format(wall_id), annotated)
+
+    _collect_candidate_points(candidates, frame, collector)
 
     logger.info(
         "Wall {}: {} points, {} detections, {} kept".format(
@@ -549,6 +601,7 @@ def _iter_dense_chunks(path, parameters):
 # Accumulation strategies
 # ---------------------------------------------------------------------------
 def _build_accumulators(walls, parameters, margin=None):
+    collect = bool(parameters.get("OPENING_COLLECT_POINTS"))
     accumulators = []
     for wall in walls:
         frame = _wall_frame(wall)
@@ -557,6 +610,7 @@ def _build_accumulators(walls, parameters, margin=None):
             "frame": frame,
             "counts": _empty_count_grid(frame, parameters),
             "point_count": 0,
+            "collector": {"chunks": [], "n": 0} if collect else None,
         }
         if margin is not None:
             acc["crop_geometry"] = _wall_crop_geometry(wall, margin)
@@ -572,14 +626,14 @@ def _accumulate_from_dense(accumulators, point_cloud_path, parameters):
             cropped = _filter_chunk_to_wall_crop(chunk, acc["crop_geometry"])
             if len(cropped):
                 acc["point_count"] += _accumulate_counts(
-                    acc["counts"], acc["frame"], cropped, parameters
+                    acc["counts"], acc["frame"], cropped, parameters, acc["collector"]
                 )
 
 
 def _accumulate_from_df(accumulators, wall_points_xyz, parameters):
     for acc in accumulators:
         acc["point_count"] += _accumulate_counts(
-            acc["counts"], acc["frame"], wall_points_xyz, parameters
+            acc["counts"], acc["frame"], wall_points_xyz, parameters, acc["collector"]
         )
 
 
@@ -590,12 +644,27 @@ def _candidates_to_output(candidates):
     doors = []
     windows = []
     openings = []
+    points = []
     counters = {"door": 1, "window": 1, "opening": 1}
 
     for candidate in candidates:
         category = candidate.pop("category")
-        candidate["id"] = str(counters[category])
+        candidate_points = candidate.pop("_points", [])
+        candidate.pop("_span", None)
+        candidate_id = str(counters[category])
+        candidate["id"] = candidate_id
         counters[category] += 1
+
+        # Points inside this opening's box, tagged like floor/ceiling/wall points.
+        for location in candidate_points:
+            points.append(
+                {
+                    "category": category,
+                    "id": candidate_id,
+                    "location": location,
+                    "color": {"r": 0, "g": 0, "b": 0},
+                }
+            )
 
         if category == "door":
             doors.append(candidate)
@@ -605,7 +674,7 @@ def _candidates_to_output(candidates):
             openings.append(candidate)
 
     return {
-        "points": [],
+        "points": points,
         "doors": doors,
         "windows": windows,
         "openings": openings,
@@ -669,7 +738,6 @@ def run_openings(
         # Align the dense cloud to the walls (xyz_offset, explicit offset, or annotation).
         if parameters.get("OPENING_POINT_CLOUD_TO_CSV_OFFSET") is None:
             parameters = _resolve_e57_offset(parameters)
-            print('minxyz', parameters)
         if parameters.get("OPENING_POINT_CLOUD_TO_CSV_OFFSET") is None:
             logger.warning(
                 "No xyz_offset / OPENING_POINT_CLOUD_TO_CSV_OFFSET / annotation given; the "
@@ -696,6 +764,7 @@ def run_openings(
                 detector,
                 parameters,
                 image_sink,
+                acc["collector"],
             )
         )
 
