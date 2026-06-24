@@ -16,7 +16,7 @@ import inspect
 import numpy as np
 
 from ..runtime import get_device, logger
-from .base import Detection
+from .base import Detection, normalize_prompts, run_multi_prompt
 
 
 class GroundingDinoHFDetector:
@@ -28,13 +28,15 @@ class GroundingDinoHFDetector:
         text_prompt="a door. a window. an opening.",
         box_threshold=0.35,
         text_threshold=0.25,
+        nms_iou=0.5,
         device=None,
     ):
         self.model_id = model_id
-        # Grounding DINO expects lowercase prompts, each phrase ended by a period.
-        self.text_prompt = text_prompt
+        # A list runs each prompt separately and combines; a string is one call.
+        self.prompts = normalize_prompts(text_prompt)
         self.box_threshold = float(box_threshold)
         self.text_threshold = float(text_threshold)
+        self.nms_iou = nms_iou
         self._device = device
         self._processor = None
         self._model = None
@@ -88,15 +90,22 @@ class GroundingDinoHFDetector:
         return fn(outputs, input_ids, **kwargs)[0]
 
     def detect(self, image_rgb):
+        self._ensure_loaded()
+        return run_multi_prompt(self._detect_single, image_rgb, self.prompts, self.nms_iou)
+
+    def _detect_single(self, image_rgb, caption):
         import torch
         from PIL import Image
 
-        self._ensure_loaded()
+        # HF expects lowercase, period-terminated captions (e.g. "door .").
+        caption = caption.strip()
+        if not caption.endswith("."):
+            caption = caption + " ."
 
         image = Image.fromarray(np.ascontiguousarray(image_rgb))
         inputs = self._processor(
             images=image,
-            text=self.text_prompt,
+            text=caption.lower(),
             return_tensors="pt",
         ).to(self._device)
 

@@ -22,7 +22,7 @@ wall image through the same transform pipeline so no temp PNG is needed.
 import numpy as np
 
 from ..runtime import get_device, logger
-from .base import Detection
+from .base import Detection, normalize_prompts, run_multi_prompt
 
 # ImageNet normalization used by groundingdino.util.inference.load_image.
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -59,13 +59,16 @@ class GroundingDinoDetector:
         text_prompt="opening . door . window .",
         box_threshold=0.35,
         text_threshold=0.25,
+        nms_iou=0.5,
         device=None,
     ):
         self.config_path = config_path
         self.weights_path = weights_path
-        self.text_prompt = text_prompt
+        # A list runs each prompt separately and combines; a string is one call.
+        self.prompts = normalize_prompts(text_prompt)
         self.box_threshold = float(box_threshold)
         self.text_threshold = float(text_threshold)
+        self.nms_iou = nms_iou
         self._device = device
         self._model = None
         self._transform = None
@@ -110,11 +113,13 @@ class GroundingDinoDetector:
         )
 
     def detect(self, image_rgb):
+        self._ensure_loaded()
+        return run_multi_prompt(self._detect_single, image_rgb, self.prompts, self.nms_iou)
+
+    def _detect_single(self, image_rgb, caption):
         import torch
         from groundingdino.util.inference import predict
         from PIL import Image
-
-        self._ensure_loaded()
 
         image_rgb = np.ascontiguousarray(image_rgb)
         height, width = image_rgb.shape[:2]
@@ -124,7 +129,7 @@ class GroundingDinoDetector:
         boxes, logits, phrases = predict(
             model=self._model,
             image=image_tensor,
-            caption=self.text_prompt,
+            caption=caption,
             box_threshold=self.box_threshold,
             text_threshold=self.text_threshold,
             device=str(self._device),

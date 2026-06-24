@@ -226,13 +226,29 @@ def _detection_to_candidate(detection, wall, frame, n_z, n_s, parameters):
     s_min, s_max, z_min, z_max = span
     width = s_max - s_min  # native units (feet); matches the bbox geometry below
     height = z_max - z_min
-    # Size filters are physical (metres); convert the native extents to compare.
+    if width <= 0 or height <= 0:
+        return None
+
+    # Physical size filters (metres): convert the native extents to compare.
     units_per_meter = _units_per_meter(parameters)
     width_m = width / units_per_meter
     height_m = height / units_per_meter
     if width_m < parameters["OPENING_MIN_WIDTH"] or width_m > parameters["OPENING_MAX_WIDTH"]:
         return None
     if height_m < parameters["OPENING_MIN_HEIGHT"] or height_m > parameters["OPENING_MAX_HEIGHT"]:
+        return None
+
+    # Coverage: a box spanning most of the wall image is the wall itself, not an
+    # opening. Compare the box area to the wall's (s, z) extent.
+    wall_width = frame["s_max"] - frame["s_min"]
+    wall_height = frame["z_max"] - frame["z_min"]
+    coverage = (width * height) / (wall_width * wall_height) if wall_width > 0 and wall_height > 0 else 1.0
+    if coverage > parameters["OPENING_MAX_COVERAGE"]:
+        return None
+
+    # Aspect ratio (width / height): rejects implausibly wide/flat or thin boxes.
+    aspect = width_m / height_m
+    if aspect < parameters["OPENING_MIN_ASPECT_RATIO"] or aspect > parameters["OPENING_MAX_ASPECT_RATIO"]:
         return None
 
     category = _classify_label(detection.label)
@@ -247,6 +263,8 @@ def _detection_to_candidate(detection, wall, frame, n_z, n_s, parameters):
         "height": float(height),
         "bottomZ": float(z_min),
         "topZ": float(z_max),
+        "coverage": float(coverage),
+        "aspectRatio": float(aspect),
         # (s, z) span in the wall frame, used to gather points then popped.
         "_span": (s_min, s_max, z_min, z_max),
     }

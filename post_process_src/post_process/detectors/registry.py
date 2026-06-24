@@ -21,6 +21,7 @@ def build_detector(parameters) -> OpeningDetector:
             text_prompt=parameters["OPENING_GD_TEXT_PROMPT"],
             box_threshold=parameters["OPENING_GD_BOX_THRESHOLD"],
             text_threshold=parameters["OPENING_GD_TEXT_THRESHOLD"],
+            nms_iou=parameters["OPENING_GD_NMS_IOU"],
         )
 
     if name == "grounding_dino_hf":
@@ -32,6 +33,7 @@ def build_detector(parameters) -> OpeningDetector:
             text_prompt=parameters["OPENING_GD_TEXT_PROMPT"],
             box_threshold=parameters["OPENING_GD_BOX_THRESHOLD"],
             text_threshold=parameters["OPENING_GD_TEXT_THRESHOLD"],
+            nms_iou=parameters["OPENING_GD_NMS_IOU"],
         )
 
     raise ValueError(

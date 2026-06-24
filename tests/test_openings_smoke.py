@@ -231,6 +231,65 @@ def test_to_original_coordinates_all_handles_many_and_none():
     assert wall_output["walls"][0]["bbox"][0]["x"] == 4.0
 
 
+def test_normalize_prompts_and_nms():
+    from post_process.detectors.base import Detection, nms, normalize_prompts
+
+    assert normalize_prompts("door . window .") == ["door . window ."]
+    assert normalize_prompts(["door", "window", "opening"]) == ["door", "window", "opening"]
+
+    a = Detection("door", 0.9, (0, 0, 10, 10))
+    b = Detection("opening", 0.5, (1, 1, 11, 11))      # overlaps a -> suppressed
+    c = Detection("window", 0.8, (100, 100, 110, 110))  # disjoint -> kept
+    kept = nms([a, b, c], 0.5)
+    assert sorted(d.label for d in kept) == ["door", "window"]
+    # disabled NMS keeps everything (pure union)
+    assert len(nms([a, b, c], 0.0)) == 3
+
+
+def test_run_multi_prompt_combines_and_dedups():
+    from post_process.detectors.base import Detection, run_multi_prompt
+
+    scores = {"door": 0.9, "window": 0.6, "opening": 0.4}
+
+    def detect_single(_img, prompt):
+        return [Detection(prompt, scores[prompt], (0, 0, 5, 5))]  # same box each prompt
+
+    prompts = ["door", "window", "opening"]
+    kept = run_multi_prompt(detect_single, None, prompts, 0.5)
+    assert [d.label for d in kept] == ["door"]              # overlap -> highest wins
+    union = run_multi_prompt(detect_single, None, prompts, 0.0)
+    assert sorted(d.label for d in union) == ["door", "opening", "window"]
+
+
+def _render_dims(params, wall):
+    frame = op._wall_frame(wall)
+    fine = op._empty_count_grid(frame, params)
+    n_z, n_s = downsample_sum(fine, op._render_bin_factor(params)).shape
+    return frame, n_z, n_s
+
+
+def test_coverage_filter_rejects_full_wall_box():
+    params = PostProcessConfig().to_parameters()
+    params["POINT_CLOUD_TO_POST_PROCESSING_SCALE"] = 1.0
+    wall = _axis_aligned_wall()
+    frame, n_z, n_s = _render_dims(params, wall)
+    cell = params["OPENING_IMAGE_CELL_PX"]
+    # box covering the whole wall image -> coverage ~1.0 > OPENING_MAX_COVERAGE
+    det = Detection("door", 0.9, (0, 0, n_s * cell, n_z * cell))
+    assert op._detection_to_candidate(det, wall, frame, n_z, n_s, params) is None
+
+
+def test_aspect_ratio_filter_rejects_wide_flat_box():
+    params = PostProcessConfig().to_parameters()
+    params["POINT_CLOUD_TO_POST_PROCESSING_SCALE"] = 1.0
+    wall = _axis_aligned_wall()  # 4 m x 3 m -> render 60 x 80
+    frame, n_z, n_s = _render_dims(params, wall)
+    cell = params["OPENING_IMAGE_CELL_PX"]
+    # full width, thin band at the bottom: ~4 m wide x ~0.3 m tall -> aspect ~13 > 10
+    det = Detection("opening", 0.9, (0, (n_z - 6) * cell, n_s * cell, n_z * cell))
+    assert op._detection_to_candidate(det, wall, frame, n_z, n_s, params) is None
+
+
 def test_box_to_grid_span_inverts_flip_and_cell_px():
     params = PostProcessConfig().to_parameters()
     params["POINT_CLOUD_TO_POST_PROCESSING_SCALE"] = 1.0

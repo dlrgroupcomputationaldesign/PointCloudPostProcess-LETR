@@ -49,9 +49,13 @@ class OpeningConfig:
     # "grounding_dino_hf"  -> HuggingFace transformers port (default; no CUDA build)
     # "grounding_dino"     -> original IDEA-Research package (needs CUDA toolkit + --no-build-isolation)
     detector: str = "grounding_dino_hf"
-    gd_text_prompt: str = "opening . door . window ."
+    # A list runs each prompt separately and combines the results (better than one
+    # combined ". "-joined caption in practice); a single string is one call.
+    gd_text_prompt: Sequence[str] | str = ("door", "window", "opening")
     gd_box_threshold: float = 0.35
     gd_text_threshold: float = 0.25
+    # IoU for combining boxes across prompts (None/0 = keep all; pure union).
+    gd_nms_iou: float = 0.5
     # Original-package backend: only the .pth is required; the config .py defaults
     # to GroundingDINO_SwinT_OGC.py bundled in the installed groundingdino package.
     gd_weights_path: str | None = None
@@ -66,6 +70,12 @@ class OpeningConfig:
     min_height: float = 0.3
     max_height: float = 4.0
     min_wall_points: int = 200
+    # Reject boxes covering more than this fraction of the wall image (a box that
+    # is ~the whole wall is the wall, not an opening).
+    max_coverage: float = 0.85
+    # Aspect ratio = width / height; rejects implausibly wide/flat or thin boxes.
+    min_aspect_ratio: float = 0.1
+    max_aspect_ratio: float = 10.0
 
     # Attach the cloud points inside each detected opening's box to the output
     # (like floor/wall points). The per-wall point buffer is reservoir-capped to
@@ -146,9 +156,14 @@ class PostProcessConfig:
             "BUFFER_THR": self.wall.buffer_threshold,
             "OPENINGS_ENABLED": self.openings.enabled,
             "OPENING_DETECTOR": self.openings.detector,
-            "OPENING_GD_TEXT_PROMPT": self.openings.gd_text_prompt,
+            "OPENING_GD_TEXT_PROMPT": (
+                self.openings.gd_text_prompt
+                if isinstance(self.openings.gd_text_prompt, str)
+                else list(self.openings.gd_text_prompt)
+            ),
             "OPENING_GD_BOX_THRESHOLD": self.openings.gd_box_threshold,
             "OPENING_GD_TEXT_THRESHOLD": self.openings.gd_text_threshold,
+            "OPENING_GD_NMS_IOU": self.openings.gd_nms_iou,
             "OPENING_GD_CONFIG_PATH": self.openings.gd_config_path,
             "OPENING_GD_WEIGHTS_PATH": self.openings.gd_weights_path,
             "OPENING_GD_MODEL_ID": self.openings.gd_model_id,
@@ -157,6 +172,9 @@ class PostProcessConfig:
             "OPENING_MIN_HEIGHT": self.openings.min_height,
             "OPENING_MAX_HEIGHT": self.openings.max_height,
             "OPENING_MIN_WALL_POINTS": self.openings.min_wall_points,
+            "OPENING_MAX_COVERAGE": self.openings.max_coverage,
+            "OPENING_MIN_ASPECT_RATIO": self.openings.min_aspect_ratio,
+            "OPENING_MAX_ASPECT_RATIO": self.openings.max_aspect_ratio,
             "OPENING_COLLECT_POINTS": self.openings.collect_points,
             "OPENING_MAX_COLLECTED_POINTS_PER_WALL": self.openings.max_collected_points_per_wall,
             "OPENING_IMAGE_BIN_M": self.openings.image_bin_m,
