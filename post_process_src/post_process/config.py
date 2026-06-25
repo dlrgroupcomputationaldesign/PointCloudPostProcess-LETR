@@ -92,8 +92,12 @@ class OpeningConfig:
     image_fine_bin_m: float = 0.025
     image_cell_px: int = 4
     image_transform: str = "log1p"  # log1p | sqrt | raw
-    image_clip_pct: float | None = 99.0
+    image_clip_pct: float | None = None  # None -> vmax = max(log1p(count))
     image_gamma: float | None = None
+    # Brightness: multiplies vmax (>1 lightens, <1 darkens). Default 1.8 with
+    # clip_pct=None reproduces the brighter output_log_img render (calibrated on
+    # Laramie wall_17: package mean ~153 vs reference ~150), which detects better.
+    image_vmax_scale: float = 1.8
     image_cmap: str = "gray_r"  # gray_r (openings bright) | gray
     wall_distance_tolerance: float = 0.15
     # When no blob location is set, write the log/detection images + JSON here so
@@ -183,6 +187,7 @@ class PostProcessConfig:
             "OPENING_IMAGE_TRANSFORM": self.openings.image_transform,
             "OPENING_IMAGE_CLIP_PCT": self.openings.image_clip_pct,
             "OPENING_IMAGE_GAMMA": self.openings.image_gamma,
+            "OPENING_IMAGE_VMAX_SCALE": self.openings.image_vmax_scale,
             "OPENING_IMAGE_CMAP": self.openings.image_cmap,
             "OPENING_WALL_DISTANCE_TOLERANCE": self.openings.wall_distance_tolerance,
             "OPENING_LOCAL_OUTPUT_DIR": self.openings.local_output_dir,

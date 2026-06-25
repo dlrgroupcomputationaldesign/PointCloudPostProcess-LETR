@@ -67,6 +67,9 @@ def render_log_image(counts, parameters):
         vmax = float(np.percentile(pos, float(clip_pct)))
     else:
         vmax = float(arr.max()) if arr.size else 1.0
+    # Brightness lever: a scale > 1 raises vmax so typical density maps lighter
+    # (gray_r), reproducing brighter renders; < 1 darkens. Default 1.0 = no change.
+    vmax *= float(parameters.get("OPENING_IMAGE_VMAX_SCALE", 1.0) or 1.0)
     if vmax <= 0.0:
         vmax = 1.0
 
