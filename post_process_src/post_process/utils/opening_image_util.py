@@ -41,6 +41,40 @@ def count_grid_dims(frame, bin_m):
     return n_z, n_s
 
 
+def _enhance_grayscale(img8, parameters):
+    """Optional photo-like enhancement of the uint8 grayscale before flip/upscale.
+
+    Applied in order: Gaussian denoise -> CLAHE local-contrast -> unsharp mask.
+    Each step is skipped when its strength parameter is 0/None, so the default
+    config returns ``img8`` unchanged. Boundaries are crispened *after* denoising
+    so speckle isn't amplified by the unsharp step.
+    """
+    denoise_sigma = float(parameters.get("OPENING_IMAGE_DENOISE_SIGMA", 0.0) or 0.0)
+    clahe_clip = float(parameters.get("OPENING_IMAGE_CLAHE_CLIP", 0.0) or 0.0)
+    unsharp_amount = float(parameters.get("OPENING_IMAGE_UNSHARP_AMOUNT", 0.0) or 0.0)
+
+    if denoise_sigma <= 0.0 and clahe_clip <= 0.0 and unsharp_amount <= 0.0:
+        return img8
+
+    import cv2
+
+    out = img8
+    if denoise_sigma > 0.0:
+        out = cv2.GaussianBlur(out, (0, 0), denoise_sigma)
+
+    if clahe_clip > 0.0:
+        tile = max(1, int(parameters.get("OPENING_IMAGE_CLAHE_TILE", 8) or 8))
+        clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(tile, tile))
+        out = clahe.apply(out)
+
+    if unsharp_amount > 0.0:
+        sigma = float(parameters.get("OPENING_IMAGE_UNSHARP_SIGMA", 1.0) or 1.0)
+        blurred = cv2.GaussianBlur(out, (0, 0), sigma)
+        out = cv2.addWeighted(out, 1.0 + unsharp_amount, blurred, -unsharp_amount, 0.0)
+
+    return np.ascontiguousarray(out, dtype=np.uint8)
+
+
 def render_log_image(counts, parameters):
     """Turn a raw count grid into an HxWx3 uint8 RGB image for the detector.
 
@@ -87,6 +121,7 @@ def render_log_image(counts, parameters):
         raise ValueError("unknown OPENING_IMAGE_CMAP: {}".format(cmap))
 
     img8 = (gray * 255.0).astype(np.uint8)
+    img8 = _enhance_grayscale(img8, parameters)
     img8 = np.flipud(img8)  # row 0 -> top (z_max)
 
     cell_px = max(1, int(parameters["OPENING_IMAGE_CELL_PX"]))

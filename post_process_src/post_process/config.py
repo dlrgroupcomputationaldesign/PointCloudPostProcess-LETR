@@ -98,6 +98,19 @@ class OpeningConfig:
     # clip_pct=None reproduces the brighter output_log_img render (calibrated on
     # Laramie wall_17: package mean ~153 vs reference ~150), which detects better.
     image_vmax_scale: float = 1.8
+    # Post-render enhancement, applied to the uint8 grayscale in this order:
+    # denoise -> CLAHE -> unsharp. All default to off so the render is unchanged.
+    # Gaussian denoise to kill sparse-wall speckle before sharpening (px sigma at
+    # the rendered resolution; 0 = off).
+    image_denoise_sigma: float = 0.0
+    # CLAHE local-contrast equalization: clip limit (0/None = off) and tile count
+    # per axis. Makes openings pop against locally-varying wall density.
+    image_clahe_clip: float = 0.0
+    image_clahe_tile: int = 8
+    # Unsharp mask to crispen opening edges: amount (0 = off) and blur sigma (px).
+    # out = img + amount * (img - gaussian(img, sigma)).
+    image_unsharp_amount: float = 0.0
+    image_unsharp_sigma: float = 1.0
     image_cmap: str = "gray_r"  # gray_r (openings bright) | gray
     wall_distance_tolerance: float = 0.15
     # When no blob location is set, write the log/detection images + JSON here so
@@ -188,6 +201,11 @@ class PostProcessConfig:
             "OPENING_IMAGE_CLIP_PCT": self.openings.image_clip_pct,
             "OPENING_IMAGE_GAMMA": self.openings.image_gamma,
             "OPENING_IMAGE_VMAX_SCALE": self.openings.image_vmax_scale,
+            "OPENING_IMAGE_DENOISE_SIGMA": self.openings.image_denoise_sigma,
+            "OPENING_IMAGE_CLAHE_CLIP": self.openings.image_clahe_clip,
+            "OPENING_IMAGE_CLAHE_TILE": self.openings.image_clahe_tile,
+            "OPENING_IMAGE_UNSHARP_AMOUNT": self.openings.image_unsharp_amount,
+            "OPENING_IMAGE_UNSHARP_SIGMA": self.openings.image_unsharp_sigma,
             "OPENING_IMAGE_CMAP": self.openings.image_cmap,
             "OPENING_WALL_DISTANCE_TOLERANCE": self.openings.wall_distance_tolerance,
             "OPENING_LOCAL_OUTPUT_DIR": self.openings.local_output_dir,
