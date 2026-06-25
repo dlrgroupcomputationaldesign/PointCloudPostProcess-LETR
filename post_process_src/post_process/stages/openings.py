@@ -29,6 +29,7 @@ from ..utils.opening_image_util import (
     box_to_grid_span,
     count_grid_dims,
     downsample_sum,
+    render_intensity_image,
     render_log_image,
 )
 from .common import make_blob_factory
@@ -161,16 +162,19 @@ def _reservoir_extend(collector, new_points, cap):
         collector["n"] = cap
 
 
-def _accumulate_counts(counts, frame, points_xyz, parameters, collector=None):
+def _accumulate_counts(counts, frame, points_xyz, parameters, collector=None, intensity_sum=None):
     """Bin points that fall on this wall into its fine (z, s) count grid.
 
     When ``collector`` is given, the wall-plane points are also retained (capped)
-    so points inside detected openings can be emitted later.
+    so points inside detected openings can be emitted later. When ``intensity_sum``
+    is given and ``points_xyz`` carries a 4th column (intensity), the per-cell
+    intensity sum is accumulated in parallel for the reflectance render.
     """
     if points_xyz.size == 0:
         return 0
 
-    s, t, z = _project_points(points_xyz, frame)
+    xyz = points_xyz[:, :3]
+    s, t, z = _project_points(xyz, frame)
     distance_tolerance = float(parameters["OPENING_WALL_DISTANCE_TOLERANCE"])
     wall_mask = (
         (s >= frame["s_min"])
@@ -186,7 +190,7 @@ def _accumulate_counts(counts, frame, points_xyz, parameters, collector=None):
     if collector is not None:
         _reservoir_extend(
             collector,
-            points_xyz[wall_mask],
+            xyz[wall_mask],
             int(parameters["OPENING_MAX_COLLECTED_POINTS_PER_WALL"]),
         )
 
@@ -197,6 +201,8 @@ def _accumulate_counts(counts, frame, points_xyz, parameters, collector=None):
     s_idx = np.clip(np.floor((s - frame["s_min"]) / bin_native).astype(int), 0, n_s - 1)
     z_idx = np.clip(np.floor((z - frame["z_min"]) / bin_native).astype(int), 0, n_z - 1)
     np.add.at(counts, (z_idx, s_idx), 1)
+    if intensity_sum is not None and points_xyz.shape[1] >= 4:
+        np.add.at(intensity_sum, (z_idx, s_idx), points_xyz[wall_mask, 3])
     return int(s.size)
 
 
@@ -342,7 +348,24 @@ def _collect_candidate_points(candidates, frame, collector):
         ]
 
 
-def _detect_wall(wall, frame, counts, point_count, detector, parameters, image_sink, collector=None):
+def _select_render(render_counts, intensity_sum, parameters, use_intensity):
+    """Pick the wall image: mean-intensity when requested and the wall has enough
+    coverage, else the log-density render. Both use the same render-binned grid.
+    """
+    if use_intensity and intensity_sum is not None:
+        render_intensity = downsample_sum(intensity_sum, _render_bin_factor(parameters))
+        coverage = float((render_counts > 0).mean()) if render_counts.size else 0.0
+        min_cov = float(parameters.get("OPENING_IMAGE_INTENSITY_MIN_COVERAGE", 0.0) or 0.0)
+        if coverage >= min_cov:
+            return render_intensity_image(render_intensity, render_counts, parameters)
+        logger.info(
+            "wall coverage {:.2f} < {:.2f}; rendering density instead".format(coverage, min_cov)
+        )
+    return render_log_image(render_counts, parameters)
+
+
+def _detect_wall(wall, frame, counts, point_count, detector, parameters, image_sink,
+                 collector=None, intensity_sum=None, use_intensity=False):
     """Render -> detect -> map for a single wall, writing both images via image_sink.
 
     ``counts`` is the FINE histogram; it is block-summed to the render bin first,
@@ -354,7 +377,7 @@ def _detect_wall(wall, frame, counts, point_count, detector, parameters, image_s
         return []
 
     render_counts = downsample_sum(counts, _render_bin_factor(parameters))
-    image_rgb = render_log_image(render_counts, parameters)
+    image_rgb = _select_render(render_counts, intensity_sum, parameters, use_intensity)
     n_z, n_s = render_counts.shape
     wall_id = str(wall["id"])
 
@@ -545,11 +568,13 @@ def _to_wall_frame(points_xyz, parameters):
     return points_xyz.astype(float, copy=False) * scale - offset
 
 
-def _iter_e57_raw_chunks(path, chunk_size):
+def _iter_e57_raw_chunks(path, chunk_size, with_intensity=False):
     import pye57
 
     e57 = pye57.E57(str(path))
     fields = ["cartesianX", "cartesianY", "cartesianZ"]
+    if with_intensity:
+        fields = fields + ["intensity"]
     try:
         for scan_index in range(e57.scan_count):
             header = e57.get_header(scan_index)
@@ -560,17 +585,13 @@ def _iter_e57_raw_chunks(path, chunk_size):
                 if count <= 0:
                     break
                 yield np.column_stack(
-                    (
-                        data["cartesianX"][:count],
-                        data["cartesianY"][:count],
-                        data["cartesianZ"][:count],
-                    )
+                    [data[f][:count] for f in fields]
                 ).astype(float, copy=False)
     finally:
         e57.close()
 
 
-def _iter_las_raw_chunks(path, chunk_size):
+def _iter_las_raw_chunks(path, chunk_size, with_intensity=False):
     try:
         import laspy
     except ImportError as exc:  # pragma: no cover - optional dependency
@@ -580,9 +601,38 @@ def _iter_las_raw_chunks(path, chunk_size):
 
     with laspy.open(str(path)) as reader:
         for points in reader.chunk_iterator(chunk_size):
-            yield np.column_stack(
-                (np.asarray(points.x), np.asarray(points.y), np.asarray(points.z))
-            ).astype(float, copy=False)
+            cols = [np.asarray(points.x), np.asarray(points.y), np.asarray(points.z)]
+            if with_intensity:
+                cols.append(np.asarray(points.intensity))
+            yield np.column_stack(cols).astype(float, copy=False)
+
+
+def _dense_intensity_available(path):
+    """Whether the dense source carries a per-point intensity field.
+
+    Only .e57 (intensity field) and .las/.laz (standard intensity dimension)
+    can; .npy/.ply/etc. cannot, so intensity rendering falls back to density.
+    """
+    import os
+
+    ext = os.path.splitext(str(path))[1].lower()
+    try:
+        if ext == ".e57":
+            import pye57
+
+            e57 = pye57.E57(str(path))
+            try:
+                return "intensity" in list(e57.get_header(0).point_fields)
+            finally:
+                e57.close()
+        if ext in (".las", ".laz"):
+            import laspy
+
+            with laspy.open(str(path)) as reader:
+                return "intensity" in reader.header.point_format.dimension_names
+    except Exception as exc:  # pragma: no cover - defensive probe
+        logger.warning("Could not probe intensity in {}: {}".format(path, exc))
+    return False
 
 
 def _iter_array_raw_chunks(points_xyz, chunk_size):
@@ -590,11 +640,13 @@ def _iter_array_raw_chunks(points_xyz, chunk_size):
         yield np.asarray(points_xyz[start : start + chunk_size], dtype=float)
 
 
-def _iter_dense_chunks(path, parameters):
-    """Yield raw (unconverted) XYZ chunks from a point cloud, dispatching on extension.
+def _iter_dense_chunks(path, parameters, with_intensity=False):
+    """Yield raw (unconverted) XYZ[+intensity] chunks from a point cloud, dispatching
+    on extension.
 
     Supports .e57 (pye57), .las/.laz (laspy), .npy (numpy), and anything Open3D
-    can read (.ply/.pcd/.pts/.xyz). Large formats stream; others load once.
+    can read (.ply/.pcd/.pts/.xyz). Large formats stream; others load once. When
+    ``with_intensity`` is set, .e57/.las chunks carry intensity as a 4th column.
     """
     import os
 
@@ -602,9 +654,9 @@ def _iter_dense_chunks(path, parameters):
     chunk_size = int(parameters["OPENING_POINT_CLOUD_CHUNK_SIZE"])
 
     if ext == ".e57":
-        yield from _iter_e57_raw_chunks(path, chunk_size)
+        yield from _iter_e57_raw_chunks(path, chunk_size, with_intensity)
     elif ext in (".las", ".laz"):
-        yield from _iter_las_raw_chunks(path, chunk_size)
+        yield from _iter_las_raw_chunks(path, chunk_size, with_intensity)
     elif ext == ".npy":
         arr = np.load(str(path), mmap_mode="r")
         yield from _iter_array_raw_chunks(np.asarray(arr[:, :3]), chunk_size)
@@ -618,17 +670,19 @@ def _iter_dense_chunks(path, parameters):
 # ---------------------------------------------------------------------------
 # Accumulation strategies
 # ---------------------------------------------------------------------------
-def _build_accumulators(walls, parameters, margin=None):
+def _build_accumulators(walls, parameters, margin=None, with_intensity=False):
     collect = bool(parameters.get("OPENING_COLLECT_POINTS"))
     accumulators = []
     for wall in walls:
         frame = _wall_frame(wall)
+        counts = _empty_count_grid(frame, parameters)
         acc = {
             "wall": wall,
             "frame": frame,
-            "counts": _empty_count_grid(frame, parameters),
+            "counts": counts,
             "point_count": 0,
             "collector": {"chunks": [], "n": 0} if collect else None,
+            "intensity_sum": np.zeros(counts.shape, dtype=np.float64) if with_intensity else None,
         }
         if margin is not None:
             acc["crop_geometry"] = _wall_crop_geometry(wall, margin)
@@ -636,15 +690,22 @@ def _build_accumulators(walls, parameters, margin=None):
     return accumulators
 
 
-def _accumulate_from_dense(accumulators, point_cloud_path, parameters):
+def _accumulate_from_dense(accumulators, point_cloud_path, parameters, use_intensity=False):
     logger.info("Streaming dense opening points from {}".format(point_cloud_path))
-    for raw_chunk in _iter_dense_chunks(point_cloud_path, parameters):
-        chunk = _to_wall_frame(raw_chunk, parameters)
+    for raw_chunk in _iter_dense_chunks(point_cloud_path, parameters, with_intensity=use_intensity):
+        # Only XYZ is transformed into the wall frame; intensity rides along as a
+        # 4th column (the crop masks on cols 0-2 and returns full rows).
+        xyz = _to_wall_frame(raw_chunk[:, :3], parameters)
+        if use_intensity and raw_chunk.shape[1] >= 4:
+            chunk = np.column_stack([xyz, raw_chunk[:, 3]])
+        else:
+            chunk = xyz
         for acc in accumulators:
             cropped = _filter_chunk_to_wall_crop(chunk, acc["crop_geometry"])
             if len(cropped):
                 acc["point_count"] += _accumulate_counts(
-                    acc["counts"], acc["frame"], cropped, parameters, acc["collector"]
+                    acc["counts"], acc["frame"], cropped, parameters,
+                    acc["collector"], acc["intensity_sum"],
                 )
 
 
@@ -751,6 +812,9 @@ def run_openings(
 
     detector = build_detector(parameters)
 
+    want_intensity = str(parameters.get("OPENING_IMAGE_SOURCE", "density")).lower() == "intensity"
+    use_intensity = False
+
     dense_path = point_cloud_path or parameters.get("OPENING_DENSE_SOURCE_PATH")
     if dense_path:
         # Align the dense cloud to the walls (xyz_offset, explicit offset, or annotation).
@@ -761,11 +825,22 @@ def run_openings(
                 "No xyz_offset / OPENING_POINT_CLOUD_TO_CSV_OFFSET / annotation given; the "
                 "dense cloud may be misaligned with the walls."
             )
+        if want_intensity:
+            use_intensity = _dense_intensity_available(dense_path)
+            if not use_intensity:
+                logger.warning(
+                    "OPENING_IMAGE_SOURCE=intensity but {} has no intensity field; "
+                    "rendering density.".format(dense_path)
+                )
         # Crop margin is physical (metres); the crop geometry is in native units.
         margin = float(parameters["OPENING_DENSE_WALL_MARGIN"]) * _units_per_meter(parameters)
-        accumulators = _build_accumulators(walls, parameters, margin=margin)
-        _accumulate_from_dense(accumulators, dense_path, parameters)
+        accumulators = _build_accumulators(walls, parameters, margin=margin, with_intensity=use_intensity)
+        _accumulate_from_dense(accumulators, dense_path, parameters, use_intensity=use_intensity)
     else:
+        if want_intensity:
+            logger.warning(
+                "OPENING_IMAGE_SOURCE=intensity requires a dense cloud; rendering density."
+            )
         accumulators = _build_accumulators(walls, parameters)
         wall_df = df[label_mask(df, "Wall", parameters)]
         wall_points_xyz = wall_df[["x", "y", "z"]].to_numpy(dtype=float)
@@ -783,6 +858,8 @@ def run_openings(
                 parameters,
                 image_sink,
                 acc["collector"],
+                acc["intensity_sum"],
+                use_intensity,
             )
         )
 

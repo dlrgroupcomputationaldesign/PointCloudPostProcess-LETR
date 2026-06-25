@@ -111,6 +111,16 @@ class OpeningConfig:
     # out = img + amount * (img - gaussian(img, sigma)).
     image_unsharp_amount: float = 0.0
     image_unsharp_sigma: float = 1.0
+    # Render source: "density" (point-count log image, geometry only) or
+    # "intensity" (mean per-cell reflectance, where the dense cloud carries an
+    # intensity field). Intensity separates glass/openings from wall by material
+    # but needs good coverage; per wall, if the fraction of populated render cells
+    # is below image_intensity_min_coverage, that wall falls back to density.
+    # Sources without an intensity field (and the no-dense-cloud path) also fall
+    # back to density.
+    image_source: str = "density"  # density | intensity
+    image_intensity_clip_pct: float | None = 99.0
+    image_intensity_min_coverage: float = 0.35
     image_cmap: str = "gray_r"  # gray_r (openings bright) | gray
     wall_distance_tolerance: float = 0.15
     # When no blob location is set, write the log/detection images + JSON here so
@@ -206,6 +216,9 @@ class PostProcessConfig:
             "OPENING_IMAGE_CLAHE_TILE": self.openings.image_clahe_tile,
             "OPENING_IMAGE_UNSHARP_AMOUNT": self.openings.image_unsharp_amount,
             "OPENING_IMAGE_UNSHARP_SIGMA": self.openings.image_unsharp_sigma,
+            "OPENING_IMAGE_SOURCE": self.openings.image_source,
+            "OPENING_IMAGE_INTENSITY_CLIP_PCT": self.openings.image_intensity_clip_pct,
+            "OPENING_IMAGE_INTENSITY_MIN_COVERAGE": self.openings.image_intensity_min_coverage,
             "OPENING_IMAGE_CMAP": self.openings.image_cmap,
             "OPENING_WALL_DISTANCE_TOLERANCE": self.openings.wall_distance_tolerance,
             "OPENING_LOCAL_OUTPUT_DIR": self.openings.local_output_dir,

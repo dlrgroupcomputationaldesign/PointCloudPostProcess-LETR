@@ -131,6 +131,48 @@ def render_log_image(counts, parameters):
     return np.stack([img8, img8, img8], axis=-1)
 
 
+def render_intensity_image(intensity_sum, counts, parameters):
+    """Render a per-cell MEAN intensity (reflectance) image, oriented like
+    :func:`render_log_image`.
+
+    ``intensity_sum`` and ``counts`` are the (already render-binned) grids of
+    summed intensity and point count. The mean is taken per populated cell;
+    empty cells (no return -- openings, occlusions) render black. High
+    reflectance maps to bright so openings/glass read as dark rectangles, which
+    is the natural-photo polarity a detector expects. The same denoise/CLAHE/
+    unsharp levers and ``cell_px`` upscaling as the density path are applied.
+    """
+    counts = counts.astype(np.float64)
+    nonempty = counts > 0
+    mean = np.zeros_like(counts)
+    mean[nonempty] = intensity_sum[nonempty] / counts[nonempty]
+
+    clip_pct = parameters.get("OPENING_IMAGE_INTENSITY_CLIP_PCT")
+    pos = mean[nonempty]
+    if clip_pct is not None and pos.size:
+        vmax = float(np.percentile(pos, float(clip_pct)))
+    else:
+        vmax = float(mean.max()) if mean.size else 1.0
+    if vmax <= 0.0:
+        vmax = 1.0
+
+    norm = np.clip(mean / vmax, 0.0, 1.0)
+    gamma = parameters.get("OPENING_IMAGE_GAMMA")
+    if gamma:
+        norm = norm ** float(gamma)
+
+    img8 = (norm * 255.0).astype(np.uint8)
+    img8[~nonempty] = 0  # openings / occlusions stay black
+    img8 = _enhance_grayscale(img8, parameters)
+    img8 = np.flipud(img8)  # row 0 -> top (z_max)
+
+    cell_px = max(1, int(parameters["OPENING_IMAGE_CELL_PX"]))
+    if cell_px > 1:
+        img8 = np.repeat(np.repeat(img8, cell_px, axis=0), cell_px, axis=1)
+
+    return np.stack([img8, img8, img8], axis=-1)
+
+
 def box_to_grid_span(box_xyxy, frame, n_z, n_s, cell_px):
     """Map a detector pixel box back to ``(s_min, s_max, z_min, z_max)`` in metres.
 
