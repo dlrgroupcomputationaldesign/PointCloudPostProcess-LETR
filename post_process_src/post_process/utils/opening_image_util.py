@@ -131,6 +131,42 @@ def render_log_image(counts, parameters):
     return np.stack([img8, img8, img8], axis=-1)
 
 
+def render_raw_log_image(counts, parameters):
+    """Match the output of ``export_all_walls_log_images.py``: pure log1p +
+    gray_r, normalized over the full data range, with no clip/vmax_scale/gamma
+    and no denoise/CLAHE/unsharp enhancement.
+
+    Mirrors what a matplotlib ``imshow(log1p(counts), cmap='gray_r',
+    origin='lower', interpolation='nearest')`` would save to disk, including
+    the flipud so row 0 of the returned raster is z_max (top of the image).
+    Useful when comparing the production renderer to the experiment script's
+    raw output without tuning any of the production levers.
+    """
+    arr = np.log1p(counts.astype(np.float64))
+    vmax = float(arr.max()) if arr.size else 1.0
+    if vmax <= 0.0:
+        vmax = 1.0
+
+    norm = np.clip(arr / vmax, 0.0, 1.0)
+
+    cmap = str(parameters.get("OPENING_IMAGE_CMAP", "gray_r"))
+    if cmap == "gray_r":
+        gray = 1.0 - norm
+    elif cmap == "gray":
+        gray = norm
+    else:
+        raise ValueError("unknown OPENING_IMAGE_CMAP: {}".format(cmap))
+
+    img8 = (gray * 255.0).astype(np.uint8)
+    img8 = np.flipud(img8)  # row 0 -> top (z_max), matches matplotlib origin='lower'
+
+    cell_px = max(1, int(parameters.get("OPENING_IMAGE_CELL_PX", 1)))
+    if cell_px > 1:
+        img8 = np.repeat(np.repeat(img8, cell_px, axis=0), cell_px, axis=1)
+
+    return np.stack([img8, img8, img8], axis=-1)
+
+
 def render_intensity_image(intensity_sum, counts, parameters):
     """Render a per-cell MEAN intensity (reflectance) image, oriented like
     :func:`render_log_image`.

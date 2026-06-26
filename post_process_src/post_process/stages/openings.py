@@ -31,6 +31,7 @@ from ..utils.opening_image_util import (
     downsample_sum,
     render_intensity_image,
     render_log_image,
+    render_raw_log_image,
 )
 from .common import make_blob_factory
 
@@ -349,8 +350,14 @@ def _collect_candidate_points(candidates, frame, collector):
 
 
 def _select_render(render_counts, intensity_sum, parameters, use_intensity):
-    """Pick the wall image: mean-intensity when requested and the wall has enough
-    coverage, else the log-density render. Both use the same render-binned grid.
+    """Pick the wall image based on OPENING_IMAGE_SOURCE.
+
+    - ``intensity``: mean per-cell reflectance when the wall has enough coverage,
+      otherwise falls through to the regular log-density render.
+    - ``raw_density``: pure log1p + gray_r, no clip/vmax_scale/enhancement —
+      same output as the offline ``export_all_walls_log_images.py`` script.
+    - ``density`` (default / anything else): production log-density render with
+      vmax clip, brightness scaling and optional denoise/CLAHE/unsharp.
     """
     if use_intensity and intensity_sum is not None:
         render_intensity = downsample_sum(intensity_sum, _render_bin_factor(parameters))
@@ -361,6 +368,10 @@ def _select_render(render_counts, intensity_sum, parameters, use_intensity):
         logger.info(
             "wall coverage {:.2f} < {:.2f}; rendering density instead".format(coverage, min_cov)
         )
+
+    source = str(parameters.get("OPENING_IMAGE_SOURCE", "density")).lower()
+    if source == "raw_density":
+        return render_raw_log_image(render_counts, parameters)
     return render_log_image(render_counts, parameters)
 
 

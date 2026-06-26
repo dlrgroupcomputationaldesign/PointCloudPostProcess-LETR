@@ -111,14 +111,19 @@ class OpeningConfig:
     # out = img + amount * (img - gaussian(img, sigma)).
     image_unsharp_amount: float = 0.0
     image_unsharp_sigma: float = 1.0
-    # Render source: "density" (point-count log image, geometry only) or
-    # "intensity" (mean per-cell reflectance, where the dense cloud carries an
-    # intensity field). Intensity separates glass/openings from wall by material
-    # but needs good coverage; per wall, if the fraction of populated render cells
-    # is below image_intensity_min_coverage, that wall falls back to density.
-    # Sources without an intensity field (and the no-dense-cloud path) also fall
-    # back to density.
-    image_source: str = "density"  # density | intensity
+    # Render source:
+    # - "density"     production log-density render with vmax clip, brightness
+    #                 scaling and optional denoise/CLAHE/unsharp.
+    # - "intensity"   mean per-cell reflectance, where the dense cloud carries an
+    #                 intensity field. Separates glass/openings from wall by
+    #                 material but needs good coverage; per wall, if the fraction
+    #                 of populated render cells is below image_intensity_min_coverage,
+    #                 that wall falls back to density. Sources without an intensity
+    #                 field (and the no-dense-cloud path) also fall back to density.
+    # - "raw_density" pure log1p + gray_r normalized over the full data range,
+    #                 with no clip / vmax_scale / gamma / enhancement. Matches the
+    #                 output of opening_detection_exp/export_all_walls_log_images.py.
+    image_source: str = "density"  # density | intensity | raw_density
     image_intensity_clip_pct: float | None = 99.0
     image_intensity_min_coverage: float = 0.35
     image_cmap: str = "gray_r"  # gray_r (openings bright) | gray
