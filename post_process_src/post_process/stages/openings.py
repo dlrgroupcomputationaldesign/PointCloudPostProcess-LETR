@@ -412,7 +412,8 @@ def _detect_wall(wall, frame, counts, point_count, detector, parameters, image_s
             }
         )
 
-    if image_sink:
+    # Only store the detected image when this wall actually has openings.
+    if image_sink and annotations:
         annotated = annotate_detections(image_rgb, annotations)
         image_sink("opening/wall_{}_detected.png".format(wall_id), annotated)
 
