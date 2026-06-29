@@ -11,6 +11,22 @@ DEFAULT_SURVEY_BASIS = (
 )
 
 @dataclass(frozen=True)
+class BoundaryConfig:
+    """Boundary extraction from the projected RANSAC inliers.
+
+    - "alphashape": concave hull (the original); density-sensitive, so the
+      boundary can zigzag where the projected point density drops.
+    - "raster": rasterize to an occupancy grid, morphologically close it to fill
+      sparse voids, then take the largest external contour. Density-independent.
+    Raster knobs are in the SAME units as the cloud (feet for these datasets).
+    """
+    method: str = "alphashape"  # alphashape | raster
+    cell: float = 0.25            # grid resolution (units per pixel)
+    fill_gap: float = 0.8         # max void width to fill (morph-close kernel)
+    simplify_eps_frac: float = 0.02  # approxPolyDP epsilon as a fraction of perimeter
+
+
+@dataclass(frozen=True)
 class FloorConfig:
     eps: float = 0.5
     min_samples: int = 10
@@ -18,6 +34,7 @@ class FloorConfig:
     ransac_n: int = 10
     num_iterations: int = 1000
     alpha: float = 2.0
+    boundary: BoundaryConfig = field(default_factory=BoundaryConfig)
 
 
 @dataclass(frozen=True)
@@ -28,6 +45,7 @@ class CeilingConfig:
     ransac_n: int = 10
     num_iterations: int = 1000
     alpha: float = 2.0
+    boundary: BoundaryConfig = field(default_factory=BoundaryConfig)
 
 
 @dataclass(frozen=True)
@@ -173,12 +191,20 @@ class PostProcessConfig:
             "RANSAC_N_F": self.floor.ransac_n,
             "NUM_ITER_F": self.floor.num_iterations,
             "ALPHA_F": self.floor.alpha,
+            "BOUNDARY_METHOD_F": self.floor.boundary.method,
+            "BOUNDARY_CELL_F": self.floor.boundary.cell,
+            "BOUNDARY_FILL_GAP_F": self.floor.boundary.fill_gap,
+            "BOUNDARY_SIMPLIFY_EPS_FRAC_F": self.floor.boundary.simplify_eps_frac,
             "EPS_C": self.ceiling.eps,
             "MIN_SAMPLES_C": self.ceiling.min_samples,
             "DIS_THR_C": self.ceiling.distance_threshold,
             "RANSAC_N_C": self.ceiling.ransac_n,
             "NUM_ITER_C": self.ceiling.num_iterations,
             "ALPHA_C": self.ceiling.alpha,
+            "BOUNDARY_METHOD_C": self.ceiling.boundary.method,
+            "BOUNDARY_CELL_C": self.ceiling.boundary.cell,
+            "BOUNDARY_FILL_GAP_C": self.ceiling.boundary.fill_gap,
+            "BOUNDARY_SIMPLIFY_EPS_FRAC_C": self.ceiling.boundary.simplify_eps_frac,
             "PROJECTED_BINS": self.wall.projected_bins,
             "RESIZE_WIDTH": self.wall.resize_width,
             "INT_THR": self.wall.intensity_threshold,

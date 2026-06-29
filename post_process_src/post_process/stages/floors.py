@@ -50,6 +50,12 @@ def run_floors(df, parameters, logging_blob_location=None):
             type="floor",
             blobs=blobs,
             snapshot_idx=i + 1,
+            boundary_opts={
+                "method": parameters.get("BOUNDARY_METHOD_F", "alphashape"),
+                "cell": parameters.get("BOUNDARY_CELL_F", 0.25),
+                "fill_gap": parameters.get("BOUNDARY_FILL_GAP_F", 0.8),
+                "simplify_eps_frac": parameters.get("BOUNDARY_SIMPLIFY_EPS_FRAC_F", 0.02),
+            },
         )
 
         floor_bboxz.append([bbox_zmin, bbox_zmax])

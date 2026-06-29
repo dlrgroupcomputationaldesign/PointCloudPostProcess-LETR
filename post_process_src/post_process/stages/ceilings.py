@@ -45,6 +45,12 @@ def run_ceilings(df, parameters, logging_blob_location=None):
             type="ceiling",
             blobs=blobs,
             snapshot_idx=i + 1,
+            boundary_opts={
+                "method": parameters.get("BOUNDARY_METHOD_C", "alphashape"),
+                "cell": parameters.get("BOUNDARY_CELL_C", 0.25),
+                "fill_gap": parameters.get("BOUNDARY_FILL_GAP_C", 0.8),
+                "simplify_eps_frac": parameters.get("BOUNDARY_SIMPLIFY_EPS_FRAC_C", 0.02),
+            },
         )
 
         rotated_corner = corner_xyz @ np.array(parameters["SURVEY_BASIS"]).T

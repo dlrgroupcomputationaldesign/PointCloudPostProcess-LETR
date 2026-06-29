@@ -4,7 +4,68 @@ from shapely.geometry import LineString
 from io import BytesIO
 from PIL import Image
 import cv2
-from .blob_util import plot_inliers_with_obb_html_bytes, plot_plane_inliers_outliers_html_bytes, upload_html_bytes_to_blob, upload_matplotlib_fig_to_blob, snapshot_plotly_html_bytes
+from .blob_util import plot_inliers_with_obb_html_bytes, plot_plane_inliers_outliers_html_bytes, upload_html_bytes_to_blob, upload_matplotlib_fig_to_blob, snapshot_plotly_html_bytes, upload_image_array_to_blob
+
+
+def _boundary_alphashape(points_2d, alpha_value, logger):
+    """Original concave-hull boundary. Returns a list of (x, y) exterior coords."""
+    import alphashape
+
+    alpha_shape = alphashape.alphashape(points_2d, alpha_value)
+    if alpha_shape.geom_type == "Polygon":
+        return list(alpha_shape.exterior.coords)
+    if alpha_shape.geom_type == "MultiPolygon":
+        return list(max(alpha_shape.geoms, key=lambda p: p.area).exterior.coords)
+    logger.info("Alpha shape is not a Polygon or MultiPolygon.")
+    return []
+
+
+def _boundary_raster(points_2d, cell, fill_gap, simplify_eps_frac, logger, mask_blob_client=None):
+    """Occupancy-grid + morphological-close boundary (fills sparse-density voids).
+
+    Rasterizes the projected points at ``cell`` resolution, closes gaps up to
+    ``fill_gap`` wide so low-density patches don't carve the outline, then takes
+    the largest external contour and simplifies it. ``cell``/``fill_gap`` are in
+    the same units as ``points_2d``. Returns a closed list of (x, y) coords, or
+    [] if no contour is found (caller falls back to alphashape).
+    """
+    if len(points_2d) < 3:
+        return []
+
+    cell = max(float(cell), 1e-6)
+    xmin, ymin = points_2d[:, 0].min(), points_2d[:, 1].min()
+    ix = np.floor((points_2d[:, 0] - xmin) / cell).astype(int)
+    iy = np.floor((points_2d[:, 1] - ymin) / cell).astype(int)
+    pad = int(np.ceil(fill_gap / cell)) + 1
+    grid = np.zeros((int(iy.max()) + 1 + 2 * pad, int(ix.max()) + 1 + 2 * pad), np.uint8)
+    grid[iy + pad, ix + pad] = 255
+
+    k = max(1, int(round(fill_gap / cell)))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
+    closed = cv2.morphologyEx(grid, cv2.MORPH_CLOSE, kernel)
+
+    if mask_blob_client is not None:
+        # Flip so the QA image reads with +y up, like the boundary plots.
+        upload_image_array_to_blob(np.dstack([np.flipud(closed)] * 3), mask_blob_client)
+
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        logger.info("Raster boundary: no contour found.")
+        return []
+
+    c = max(contours, key=cv2.contourArea)
+    eps = max(float(simplify_eps_frac), 0.0) * cv2.arcLength(c, True)
+    if eps > 0:
+        c = cv2.approxPolyDP(c, eps, True)
+
+    px = c[:, 0, :].astype(float)
+    coords = [
+        (xmin + (col - pad + 0.5) * cell, ymin + (row - pad + 0.5) * cell)
+        for col, row in px
+    ]
+    if coords and coords[0] != coords[-1]:
+        coords.append(coords[0])
+    return coords
 
 def point_axis_align(df, survey_basis):
     xyz = df[['x', 'y', 'z']].values
@@ -57,15 +118,20 @@ def fit_ceiling_floor(
     type='floor',
     blobs=None,
     snapshot_idx=None,
+    boundary_opts=None,
     ):
-    import alphashape
     import matplotlib.pyplot as plt
     import open3d as o3d
+
+    # Boundary method + raster knobs (default = original alphashape behaviour).
+    boundary_opts = boundary_opts or {}
+    boundary_method = str(boundary_opts.get("method", "alphashape")).lower()
 
     ransac_snapshot_blob_client = None
     planefit_snapshot_blob_client = None
     boundary_snapshot_blob_client = None
     edgepoints_snapshot_blob_client = None
+    mask_snapshot_blob_client = None
 
     # If caller provided blobs + index, build snapshot clients here (unless explicitly overridden)
     if blobs is not None:
@@ -73,6 +139,8 @@ def fit_ceiling_floor(
         planefit_snapshot_blob_client = blobs(f"{type}_planefit_{snapshot_idx}.html")
         boundary_snapshot_blob_client = blobs(f"{type}_boundary_{snapshot_idx}.png")
         edgepoints_snapshot_blob_client = blobs(f"{type}_edgepoints_{snapshot_idx}.png")
+        if boundary_method == "raster":
+            mask_snapshot_blob_client = blobs(f"{type}_boundary_mask_{snapshot_idx}.png")
 
     # Extract XYZ and RGB columns
     xyz = df[['x', 'y', 'z']].values  # Point coordinates
@@ -135,19 +203,23 @@ def fit_ceiling_floor(
     floor_points = np.asarray(pcd.points)[inliers]
     floor_points_2d = floor_points[:, :2]
 
-    # Choose an appropriate alpha value. This is crucial and might require experimentation.
-    # A smaller alpha will result in a tighter, more detailed (potentially fragmented) shape.
-    # A larger alpha will approach the convex hull.
-    
-    # Create an alpha shape
-    alpha_shape = alphashape.alphashape(floor_points_2d, alpha_value)
-    if alpha_shape.geom_type == 'Polygon':
-        boundary_coords = alpha_shape.exterior.coords
-    elif alpha_shape.geom_type == 'MultiPolygon':
-        boundary_coords = max(alpha_shape.geoms, key=lambda p: p.area).exterior.coords
+    # Boundary extraction. "raster" fills sparse-density voids (no zigzag);
+    # "alphashape" is the original concave hull. Raster falls back to alphashape
+    # if it fails to find a contour, so behaviour degrades gracefully.
+    if boundary_method == "raster":
+        boundary_coords = _boundary_raster(
+            floor_points_2d,
+            boundary_opts.get("cell", 0.25),
+            boundary_opts.get("fill_gap", 1.0),
+            boundary_opts.get("simplify_eps_frac", 0.02),
+            logger,
+            mask_snapshot_blob_client,
+        )
+        if len(boundary_coords) < 3:
+            logger.info("Raster boundary empty; falling back to alphashape.")
+            boundary_coords = _boundary_alphashape(floor_points_2d, alpha_value, logger)
     else:
-        logger.info("Alpha shape is not a Polygon or MultiPolygon.")
-        boundary_coords = []
+        boundary_coords = _boundary_alphashape(floor_points_2d, alpha_value, logger)
 
     # Plot if boundary was found
     if boundary_coords:
