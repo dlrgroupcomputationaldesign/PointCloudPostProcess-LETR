@@ -80,6 +80,18 @@ class BackboneBase(nn.Module):
             out[name] = NestedTensor(x, mask)
         return out
 
+from torchvision.models import (
+    ResNet18_Weights, ResNet34_Weights, ResNet50_Weights,
+    ResNet101_Weights, ResNet152_Weights,
+)
+
+_RESNET_WEIGHTS = {
+    "resnet18": ResNet18_Weights.DEFAULT,
+    "resnet34": ResNet34_Weights.DEFAULT,
+    "resnet50": ResNet50_Weights.DEFAULT,
+    "resnet101": ResNet101_Weights.DEFAULT,
+    "resnet152": ResNet152_Weights.DEFAULT,
+}
 
 class Backbone(BackboneBase):
     """ResNet backbone with frozen BatchNorm."""
@@ -87,12 +99,15 @@ class Backbone(BackboneBase):
                  train_backbone: bool,
                  return_interm_layers: bool,
                  dilation: bool):
+        weights = _RESNET_WEIGHTS[name] if is_main_process() else None
+
         backbone = getattr(torchvision.models, name)(
             replace_stride_with_dilation=[False, False, dilation],
-            pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
-        num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
+            weights=weights,
+            norm_layer=FrozenBatchNorm2d,
+        )
+        num_channels = 512 if name in ("resnet18", "resnet34") else 2048
         super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
-
 
 class Joiner(nn.Sequential):
     def __init__(self, backbone, position_embedding):
@@ -108,7 +123,6 @@ class Joiner(nn.Sequential):
             pos.append(self[1](x).to(x.tensors.dtype))
 
         return out, pos
-
 
 def build_backbone(args):
     position_embedding = build_position_encoding(args)

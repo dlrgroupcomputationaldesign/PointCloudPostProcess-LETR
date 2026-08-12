@@ -79,7 +79,7 @@ class OpeningConfig:
     gd_weights_path: str | None = None
     gd_config_path: str | None = None
     # HF-port backend: model id / local dir.
-    gd_model_id: str = "IDEA-Research/grounding-dino-tiny"
+    gd_model_id: str = "IDEA-Research/grounding-dino-tiny"      
 
     # Physical size sanity filter applied to detected boxes (metres; converted to
     # native units via e57_to_csv_scale before comparison).
@@ -90,7 +90,7 @@ class OpeningConfig:
     min_wall_points: int = 200
     # Reject boxes covering more than this fraction of the wall image (a box that
     # is ~the whole wall is the wall, not an opening).
-    max_coverage: float = 0.85
+    max_coverage: float = 0.7
     # Aspect ratio = width / height; rejects implausibly wide/flat or thin boxes.
     min_aspect_ratio: float = 0.1
     max_aspect_ratio: float = 10.0

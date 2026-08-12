@@ -317,7 +317,7 @@ survey_basis = np.array([
 
 # file_name = 'AdultEd_Labled_Output'
 
-file_path = "WyomingStateFair_Laramie_inference_test.csv" # Change this to your actual file path
+file_path = "WyomingStateFair_Laramie_inference_output.csv" # Change this to your actual file path
 df = pd.read_csv(file_path)
 
 # prepare for JSON
@@ -501,11 +501,32 @@ for level in range(num_level):
     # rotated_edge_prev = [[rotate_pt_back(mean, R, pt) for pt in pts] for pts in edge_points]
     rotated_edge = [pts @ survey_basis for pts in edge_points]
 
+    import pickle
+
+    # with open("points_zrgb.pkl", "rb") as f:
+    #     points_zrgb = pickle.load(f)
+    with open('points_zrgb.pkl', 'wb') as file:
+        pickle.dump(points_zrgb, file)
+
+    # with open("rotated_edge.pkl", "rb") as f:
+    #     rotated_edge = pickle.load(f)
+    with open('rotated_edge.pkl', 'wb') as file:
+        pickle.dump(rotated_edge, file)
+
     wall_bbox_edge.append(rotated_edge)
+
+    # with open("wall_bbox_edge.pkl", "rb") as f:
+    #     wall_bbox_edge = pickle.load(f)
+    with open('wall_bbox_edge.pkl', 'wb') as file:
+        pickle.dump(wall_bbox_edge, file)
 
     rotated_wall_xyz = [pts @ survey_basis for pts in points_xyz]
     rotated_with_rgb = [np.hstack((xyz, rgb)) for xyz, rgb in zip(rotated_wall_xyz, points_rgb)]
 
+    # with open("rotated_with_rgb.pkl", "rb") as f:
+    #     rotated_with_rgb = pickle.load(f)
+    with open('rotated_with_rgb.pkl', 'wb') as file:
+        pickle.dump(rotated_with_rgb, file)
 
     # Add points
     for i, bbox in enumerate(rotated_with_rgb):
