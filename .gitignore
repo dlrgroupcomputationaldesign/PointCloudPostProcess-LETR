@@ -43,3 +43,11 @@ all_output.json
 json_output/
 *_Output.csv
 *_inference_output.csv
+
+# Run outputs: boundary/mask/edgepoint PNGs, plotly HTML, per-project JSON.
+# All regenerable from the scripts, and para_test_output alone is ~1.6 GB.
+para_test_output/
+e57_visualization/*.html
+
+# Local agent settings
+.claude/
