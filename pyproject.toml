@@ -21,7 +21,13 @@ dependencies = [
     "pandas>=2.2.3",
     "scipy>=1.10.0",
     "azure-storage-blob>=12.21.0",
-    "pydantic>=2.12.5"
+    "pydantic>=2.12.5",
+    # Required, not optional: the boundary stage reads the raw scan on two
+    # default-reachable paths -- BOUNDARY_SOURCE="e57", and connect_mode="auto",
+    # which scores candidate boundaries against held-out scan points. Without
+    # pye57 both degrade silently-but-logged to a named fallback, so an install
+    # missing it produces different geometry rather than an error.
+    "pye57>=0.4.19"
 ]
 
 [tool.setuptools]
@@ -35,6 +41,8 @@ torch_cu121 = [
   "torch==2.2.2+cu121",
   "torchvision==0.17.2+cu121",
 ]
+# Kept as a no-op alias so existing `pip install ...[e57]` commands still work;
+# pye57 moved into the required dependencies above.
 e57 = [
   "pye57>=0.4.19",
 ]
