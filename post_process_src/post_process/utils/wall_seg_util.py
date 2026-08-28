@@ -1,13 +1,20 @@
+import math
+
 import numpy as np
 import torch
 import cv2
 import matplotlib.pyplot as plt
 import torchvision.transforms.functional as functional
 import torch.nn.functional as F
+from ..runtime import logger
 from .misc import nested_tensor_from_tensor_list
 from shapely.geometry import LineString, Polygon, MultiPolygon
 from shapely.ops import unary_union
-from .blob_util import plot_clusters_with_aabbs_html_bytes, upload_html_bytes_to_blob
+from .blob_util import (
+    plot_clusters_with_aabbs_html_bytes,
+    write_html_output,
+    write_image_output,
+)
 
 class Compose(object):
     def __init__(self, transforms):
@@ -146,19 +153,33 @@ def merge_finalize_polygon(merged_hor, merged_vert, image, resize_ratio):
 def clamp_coordinates(coords, h, w, resize_ratio):
     return [(max(0, min(h, y*resize_ratio)), max(0, min(w, x*resize_ratio))) for y, x in coords]
 
-def pixel_to_xy(px, py, x_edges, y_edges, img_width, img_height, bins):
-    bin_x = int(px / img_width * bins)
-    bin_y = int(py / img_height * bins)
+def pixel_to_xy(px, py, x_edges, y_edges, img_width, img_height, bins=None):
+    """Image pixel -> world XY, as a continuous affine map.
 
-    # Bin center coordinates
+    This used to route through the PROJECTED_BINS grid: work out which bin the
+    pixel fell in, then return that BIN'S CENTRE. That quantized every output
+    vertex onto a grid far coarser than the image it came from. On one building
+    the grid step was 0.55 units against a real wall thickness of 0.92, so every
+    wall width collapsed onto an exact multiple of the step -- an 11-inch wall
+    was emitted as 1.10 units, 20% too thick, and no intermediate width could be
+    expressed at all.
+
+    Nothing required that. project_points_to_floor renders the histogram with
+    ``extent=[x_edges[0], x_edges[-1], ...]``, so the image already spans the
+    data extent linearly and the pixel grid is finer than the bin grid. Mapping
+    straight through keeps the detector's sub-bin precision instead of throwing
+    it away, and separates the two concerns: PROJECTED_BINS sets the DETECTION
+    resolution, this sets the OUTPUT resolution.
+
+    ``+ 0.5`` because a pixel is a cell, not a sample point -- its centre sits
+    half a pixel in. ``bins`` is accepted and ignored, so existing positional
+    callers keep working.
+    """
     x_min, x_max = x_edges[0], x_edges[-1]
     y_min, y_max = y_edges[0], y_edges[-1]
 
-    bin_width_x = (x_max - x_min) / bins
-    bin_width_y = (y_max - y_min) / bins
-
-    x_coord = x_min + bin_x * bin_width_x + bin_width_x / 2
-    y_coord = y_min + bin_y * bin_width_y + bin_width_y / 2
+    x_coord = x_min + (px + 0.5) / img_width * (x_max - x_min)
+    y_coord = y_min + (py + 0.5) / img_height * (y_max - y_min)
 
     return x_coord, y_coord
 
@@ -194,25 +215,71 @@ def load_line_segmentation_model(checkpoint):
     model.eval()
     return model
 
-def img_process_model_input(image, RESIZE_WIDTH, INT_THR):  
+def buffer_from_wall_thickness(x_edges, resize_width, wall_thickness):
+    """BUFFER_THR in resized-image pixels, from a physical wall thickness.
+
+    Detected lines are buffered into wall polygons in the RESIZED image's pixel
+    space, so the buffer radius has to be half the wall's thickness expressed in
+    those pixels -- and that scale changes with both the building's extent and
+    RESIZE_WIDTH. A fixed value therefore means a different physical width on
+    every project: 2 px on one of ours is 1.65 ft of wall against an actual
+    0.92 ft (11 in), so each wall polygon swallowed ~80% more width than the
+    wall occupies, pulling in points from the rooms either side.
+
+    ``wall_thickness`` is in the cloud's own units.
+    """
+    extent = float(x_edges[-1] - x_edges[0])
+    px_per_unit = float(resize_width) / max(extent, 1e-9)
+    return max(0.5, 0.5 * float(wall_thickness) * px_per_unit)
+
+
+def slope_thresholds(angle_tol_deg):
+    """(VERT_THR, HORI_THR) from ONE angular tolerance, in degrees.
+
+    The two are reciprocals of each other and always were: the shipped 10 and
+    0.1 both encode tan(5.71 deg). Keeping them as separate numbers let them
+    drift apart into a pair that means nothing geometrically.
+    """
+    t = math.tan(math.radians(float(angle_tol_deg)))
+    t = max(t, 1e-9)
+    return 1.0 / t, t
+
+
+def img_process_model_input(image, RESIZE_WIDTH, INT_THR, morph_kernel=3):
     aspect_ratio = image.shape[1] / image.shape[0]  # width/height
     resize_ratio = image.shape[1] / RESIZE_WIDTH
     new_height = int(RESIZE_WIDTH / aspect_ratio)
 
-    # Resize the image while keeping the aspect ratio
+    # NOTE ON RESIZE_WIDTH: this is a working resolution, NOT the model's input
+    # size -- Resize([test_size]) below sets that. Downsampling here and
+    # upsampling there discards detail for nothing: INTER_AREA averages, so a
+    # thin wall line drops below INT_THR and vanishes before the model sees it.
+    # Measured on one slab, 400 -> 1200 took line detections from 38 to 52.
     resized_image = cv2.resize(image, (RESIZE_WIDTH, new_height), interpolation=cv2.INTER_AREA)
 
     # Convert to grayscale for image thresholding
     gray_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
 
-    # Apply threshold: if pixel intensity > INT_THR, set to 255; otherwise, set to 0
-    _, binary = cv2.threshold(gray_image, INT_THR, 255, cv2.THRESH_BINARY)
+    # "auto" uses Otsu, which picks the split from the image's own histogram.
+    # A fixed INT_THR is a value on a colormapped, re-rendered, resized image --
+    # it has no relation to point density and shifts if any of those change.
+    if isinstance(INT_THR, str) and str(INT_THR).lower() == "auto":
+        used_thr, binary = cv2.threshold(
+            gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+        logger.info("wall image: Otsu threshold %.0f", used_thr)
+    else:
+        _, binary = cv2.threshold(gray_image, float(INT_THR), 255, cv2.THRESH_BINARY)
 
-    kernel = np.ones((1, 1), np.uint8)
-    dilation = cv2.dilate(binary, kernel, iterations=1)
-    eroded_image = cv2.erode(dilation, kernel, iterations=1)
+    # Closing repairs single-pixel dropouts along a wall so the line stays
+    # continuous. The shipped kernel was (1, 1), which is a no-op -- dilating
+    # and eroding by a 1x1 structuring element returns the input unchanged.
+    k = int(morph_kernel)
+    if k > 1:
+        kernel = np.ones((k, k), np.uint8)
+        binary = cv2.erode(cv2.dilate(binary, kernel, iterations=1), kernel, iterations=1)
 
-    color_image = cv2.cvtColor(eroded_image, cv2.COLOR_GRAY2BGR)
+    color_image = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
 
     h, w = color_image.shape[0], color_image.shape[1]
     orig_size = torch.as_tensor([int(h), int(w)])
@@ -231,7 +298,15 @@ def img_process_model_input(image, RESIZE_WIDTH, INT_THR):
     return inputs, orig_size, resize_ratio
 
 def line_segmentation_inf(model, inputs, orig_size, image, resize_ratio, SCORE_THR, VERT_THR, HORI_THR, BUFFER_THR):
-    outputs = model(inputs)[0]
+    # no_grad is not optional here. This is inference, but without it torch
+    # keeps every intermediate activation for a backward pass that never comes,
+    # which on a transformer roughly doubles peak memory -- and the attention
+    # tensor is already the largest allocation in the pipeline. The model is
+    # handed a ~2418x1100 image (Resize([test_size]) scales the SHORT side to
+    # 1100 regardless of RESIZE_WIDTH), so that allocation runs to gigabytes and
+    # this is the difference between running and an OOM.
+    with torch.no_grad():
+        outputs = model(inputs)[0]
     out_logits, out_line = outputs['pred_logits'], outputs['pred_lines']
     prob = F.softmax(out_logits, -1)
     scores, labels = prob[..., :-1].max(-1)
@@ -244,7 +319,25 @@ def line_segmentation_inf(model, inputs, orig_size, image, resize_ratio, SCORE_T
     keep = scores >= SCORE_THR    # threshold
     keep = keep.squeeze()
     lines = lines[keep]
-    lines = lines.reshape(lines.shape[0], -1)
+
+    # reshape(-1, 4), NOT reshape(lines.shape[0], -1): when no segment clears
+    # SCORE_THR the tensor has 0 elements and -1 cannot be inferred, which
+    # raises and kills the whole run. Zero segments is a legitimate outcome --
+    # merge_finalize_polygon and extract_bbox_minmax both handle an empty list
+    # and the level simply yields no walls -- so it must not be a crash.
+    # Naming 4 explicitly makes the shape unambiguous at any length.
+    lines = lines.reshape(-1, 4)
+
+    # Silently returning no walls is worse than saying so: this is also the
+    # number to look at when tuning, since it says whether SCORE_THR or the
+    # image thresholding is what starved the detector.
+    logger.info("line segmentation: %d of %d segments above SCORE_THR=%.2f",
+                len(lines), int(np.size(scores)), SCORE_THR)
+    if not len(lines):
+        logger.info("  no segments survived -- this level will produce no walls. "
+                    "Lower SCORE_THR, or check the projected image (INT_THR / "
+                    "PROJECTED_BINS) is not blank.")
+        return []
 
     # Convert tensor to a list of LineStrings
     lst_lines = [
@@ -268,7 +361,8 @@ def line_segmentation_inf(model, inputs, orig_size, image, resize_ratio, SCORE_T
 def extract_bbox_minmax(
         ori_find_z,
         blobs=None,
-        snapshot_idx=None
+        snapshot_idx=None,
+        local_dir=None
     ):
     import open3d as o3d
 
@@ -298,12 +392,48 @@ def extract_bbox_minmax(
 
     # Visualize everything
     # o3d.visualization.draw_geometries(geometries)
-    if blobs is not None:
-        wall_bbox_snapshot_blob_client = blobs(f"wall_bbox_{snapshot_idx}.html")
+    # Snapshots go to blob when configured, else to local_dir, else nowhere --
+    # the same fallback the floor and ceiling stages use, so a run with
+    # logging_blob_location=None still produces its diagnostics while tuning.
+    if (blobs is not None or local_dir) and clusters:
         html_bytes = plot_clusters_with_aabbs_html_bytes(clusters, point_size=2)
-        upload_html_bytes_to_blob(html_bytes, wall_bbox_snapshot_blob_client)
+        write_html_output(html_bytes, f"wall_bbox_{snapshot_idx}.html",
+                          blobs, local_dir)
 
     return bbox_minmax
+
+
+def wall_overlay_image(image, polyhv_arr):
+    """Detected wall footprints drawn over the projected density image.
+
+    This is the diagnostic that wall *counts* cannot give: a count rises both
+    when a real wall is recovered and when one wall breaks into three pieces.
+    Each polygon is filled in a distinct colour and outlined, so adjacent
+    fragments of what should be a single wall are visible as colour changes
+    along an unbroken line.
+
+    ``polyhv_arr`` holds (row, col) pixel pairs in the ORIGINAL projected
+    image's frame -- merge_finalize_polygon has already undone resize_ratio --
+    so no rescaling is needed here. Returns an RGB array.
+    """
+    base = image if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    canvas = cv2.cvtColor(base.astype(np.uint8), cv2.COLOR_BGR2RGB).copy()
+    if not polyhv_arr:
+        return canvas
+
+    cmap = plt.get_cmap("hsv", max(len(polyhv_arr), 1))
+    fill = canvas.copy()
+    for i, poly in enumerate(polyhv_arr):
+        pts = np.array([[int(round(x)), int(round(y))] for y, x in poly], np.int32)
+        if len(pts) < 3:
+            continue
+        colour = tuple(int(255 * c) for c in cmap(i)[:3])
+        cv2.fillPoly(fill, [pts], colour)
+        cv2.polylines(canvas, [pts], True, colour, 1, cv2.LINE_AA)
+
+    # Fills are blended rather than opaque so the underlying point density
+    # stays readable -- the question is whether a polygon sits on actual points.
+    return cv2.addWeighted(fill, 0.45, canvas, 0.55, 0.0)
 
 def convert_to_edge_points(bboxes):
     """
