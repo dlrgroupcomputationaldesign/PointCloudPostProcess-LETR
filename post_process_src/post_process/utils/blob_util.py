@@ -333,6 +333,89 @@ def upload_html_bytes_to_blob(html_bytes, blob_client, overwrite=True):
         content_settings=ContentSettings(content_type="text/html; charset=utf-8"),
     )
 
+def write_html_output(html_bytes, name, blobs=None, local_dir=None):
+    """Send an HTML snapshot to blob storage, or to a local directory.
+
+    Mirrors the opening stage's image sink (see openings._make_image_sink) so a
+    run with ``logging_blob_location=None`` can still produce its diagnostics --
+    useful for parameter tuning, where uploading every experiment to blob is
+    noise. Blob wins when both are configured; with neither, nothing is written.
+
+    Returns the path written, or None.
+    """
+    if blobs:
+        upload_html_bytes_to_blob(html_bytes, blobs(name))
+        return None
+
+    if not local_dir:
+        return None
+
+    path = _local_target(name, local_dir)
+    with open(path, "wb") as handle:
+        handle.write(html_bytes)
+    return path
+
+
+def write_json_output(data, name, blobs=None, local_dir=None, indent=2):
+    """Send a dict to blob storage as JSON, or to a local directory."""
+    if blobs:
+        upload_dict_to_blob_json(data, blobs(name), indent=indent)
+        return None
+    if not local_dir:
+        return None
+
+    path = _local_target(name, local_dir)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=indent)
+    return path
+
+
+def _local_target(name, local_dir):
+    """Absolute path under local_dir for a blob-style name (flattened)."""
+    import os
+
+    base = os.path.abspath(str(local_dir))
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, os.path.basename(name))
+
+
+def write_image_output(image_rgb, name, blobs=None, local_dir=None):
+    """PNG an HxWx3 RGB array to blob storage, or to a local directory."""
+    if blobs:
+        upload_image_array_to_blob(image_rgb, blobs(name))
+        return None
+    if not local_dir:
+        return None
+
+    import cv2
+
+    path = _local_target(name, local_dir)
+    cv2.imwrite(path, cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR))
+    return path
+
+
+def write_figure_output(fig, name, blobs=None, local_dir=None, dpi=200):
+    """Save a matplotlib figure to blob storage, or to a local directory.
+
+    Closes the figure either way -- these are produced one per cluster inside a
+    loop, and leaving them open leaks memory. That includes the case where
+    neither sink is configured, which is why the close is unconditional.
+    """
+    import matplotlib.pyplot as plt
+
+    if blobs:
+        upload_matplotlib_fig_to_blob(fig, blobs(name), dpi=dpi)
+        return None
+    if not local_dir:
+        plt.close(fig)
+        return None
+
+    path = _local_target(name, local_dir)
+    fig.savefig(path, format="png", dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
 def upload_image_array_to_blob(image_rgb, blob_client, overwrite=True):
     """PNG-encode an HxWx3 RGB uint8 array and upload it."""
     import cv2
