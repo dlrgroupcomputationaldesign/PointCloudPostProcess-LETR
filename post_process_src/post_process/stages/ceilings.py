@@ -6,11 +6,25 @@ from ..labels import label_mask
 from ..runtime import logger
 from ..utils.blob_util import upload_dict_to_blob_json
 from ..utils.floor_ceiling_util import cluster_floor_ceiling, fit_ceiling_floor, point_axis_align
-from .common import get_parameter, make_blob_factory, scalar_mode
+from .common import (
+    auto_ransac_options,
+    e57_boundary_options,
+    cluster_method,
+    get_parameter,
+    histogram_options,
+    make_blob_factory,
+    resolve_survey_basis,
+    merge_options,
+    scalar_mode,
+)
 
 
 def run_ceilings(df, parameters, logging_blob_location=None):
     parameters = coerce_parameters(parameters)
+    # Resolve the basis ONCE and write it back, so the rotate-back-out calls
+    # below use the same matrix the alignment used. An estimated basis that
+    # differed between align and un-align would leave output in neither frame.
+    parameters["SURVEY_BASIS"] = resolve_survey_basis(df, parameters)
     blobs = make_blob_factory(logging_blob_location)
 
     logger.info("Running ceiling post-processing...")
@@ -18,7 +32,7 @@ def run_ceilings(df, parameters, logging_blob_location=None):
     segment_ceiling_df = df[label_mask(df, "Ceiling", parameters)].reset_index(drop=True)
     align_axis_ceiling_df = point_axis_align(
         segment_ceiling_df,
-        np.array(parameters["SURVEY_BASIS"]).T,
+        np.array(parameters["SURVEY_BASIS"]),
     )
     cluster_dict_ceiling = cluster_floor_ceiling(
         align_axis_ceiling_df,
@@ -26,6 +40,10 @@ def run_ceilings(df, parameters, logging_blob_location=None):
         get_parameter(parameters, "MIN_SAMPLES_C", "MIN_SAMPLES"),
         type="ceiling",
         blobs=blobs,
+        local_dir=parameters.get("LOCAL_OUTPUT_DIR"),
+        method=cluster_method(parameters, "C"),
+        hist_opts=histogram_options(parameters),
+        dominant_only=bool(parameters.get("DOMINANT_BAND_ONLY_C", True)),
     )
     ceiling_id = 1
 
@@ -50,7 +68,14 @@ def run_ceilings(df, parameters, logging_blob_location=None):
                 "cell": parameters.get("BOUNDARY_CELL_C", 0.25),
                 "fill_gap": parameters.get("BOUNDARY_FILL_GAP_C", 0.8),
                 "simplify_eps_frac": parameters.get("BOUNDARY_SIMPLIFY_EPS_FRAC_C", 0.02),
+                "simplify_abs": parameters.get("BOUNDARY_SIMPLIFY_C"),
+                "connect": bool(parameters.get("BOUNDARY_CONNECT_C", True)),
+                **merge_options(parameters, "C"),
             },
+            auto_opts=auto_ransac_options(parameters),
+            plane_method=parameters.get("PLANE_METHOD_C", parameters.get("PLANE_METHOD", "irls")),
+            e57_opts=e57_boundary_options(parameters, "C"),
+            local_dir=parameters.get("LOCAL_OUTPUT_DIR"),
         )
 
         rotated_corner = corner_xyz @ np.array(parameters["SURVEY_BASIS"]).T
@@ -102,3 +127,6 @@ def run_ceilings(df, parameters, logging_blob_location=None):
         upload_dict_to_blob_json(ceiling_output_dict, blobs("ceiling_output.json"))
 
     return ceiling_output_dict, ceiling_level
+
+
+

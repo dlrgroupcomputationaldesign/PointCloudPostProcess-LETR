@@ -6,11 +6,25 @@ from ..labels import label_mask
 from ..runtime import logger
 from ..utils.blob_util import upload_dict_to_blob_json
 from ..utils.floor_ceiling_util import cluster_floor_ceiling, fit_ceiling_floor, point_axis_align
-from .common import get_parameter, make_blob_factory, scalar_mode
+from .common import (
+    auto_ransac_options,
+    e57_boundary_options,
+    cluster_method,
+    get_parameter,
+    histogram_options,
+    make_blob_factory,
+    resolve_survey_basis,
+    merge_options,
+    scalar_mode,
+)
 
 
 def run_floors(df, parameters, logging_blob_location=None):
     parameters = coerce_parameters(parameters)
+    # Resolve the basis ONCE and write it back, so the rotate-back-out calls
+    # below use the same matrix the alignment used. An estimated basis that
+    # differed between align and un-align would leave output in neither frame.
+    parameters["SURVEY_BASIS"] = resolve_survey_basis(df, parameters)
     blobs = make_blob_factory(logging_blob_location)
 
     logger.info("Running floor post-processing...")
@@ -19,7 +33,7 @@ def run_floors(df, parameters, logging_blob_location=None):
 
     align_axis_floor_df = point_axis_align(
         segment_floor_df,
-        np.array(parameters["SURVEY_BASIS"]).T,
+        np.array(parameters["SURVEY_BASIS"]),
     )
 
     cluster_dict_floor = cluster_floor_ceiling(
@@ -28,6 +42,14 @@ def run_floors(df, parameters, logging_blob_location=None):
         get_parameter(parameters, "MIN_SAMPLES_F", "MIN_SAMPLES"),
         type="floor",
         blobs=blobs,
+        # With no blob configured, snapshots land here instead -- set
+        # LOCAL_OUTPUT_DIR to inspect clustering while tuning parameters.
+        local_dir=parameters.get("LOCAL_OUTPUT_DIR"),
+        method=cluster_method(parameters, "F"),
+        hist_opts=histogram_options(parameters),
+        # Keep only the densest band in each level -- drops surfaces that were
+        # mislabelled into this class (e.g. a ceiling landing in "Floor").
+        dominant_only=bool(parameters.get("DOMINANT_BAND_ONLY_F", True)),
     )
 
     floor_bboxz = []
@@ -55,7 +77,18 @@ def run_floors(df, parameters, logging_blob_location=None):
                 "cell": parameters.get("BOUNDARY_CELL_F", 0.25),
                 "fill_gap": parameters.get("BOUNDARY_FILL_GAP_F", 0.8),
                 "simplify_eps_frac": parameters.get("BOUNDARY_SIMPLIFY_EPS_FRAC_F", 0.02),
+                # Absolute simplify tolerance; wins over the fraction when set.
+                # "auto" derives cell/fill_gap/simplify from the point spacing.
+                "simplify_abs": parameters.get("BOUNDARY_SIMPLIFY_F"),
+                # Off by default for floors: a floor CAN have a real courtyard
+                # or opening, so voids are not automatically occlusion.
+                "connect": bool(parameters.get("BOUNDARY_CONNECT_F", False)),
+                **merge_options(parameters, "F"),
             },
+            auto_opts=auto_ransac_options(parameters),
+            plane_method=parameters.get("PLANE_METHOD_F", parameters.get("PLANE_METHOD", "irls")),
+            e57_opts=e57_boundary_options(parameters, "F"),
+            local_dir=parameters.get("LOCAL_OUTPUT_DIR"),
         )
 
         floor_bboxz.append([bbox_zmin, bbox_zmax])
@@ -110,3 +143,7 @@ def run_floors(df, parameters, logging_blob_location=None):
         upload_dict_to_blob_json(floor_output_dict, blobs("floor_output.json"))
 
     return floor_output_dict, floor_bboxz, floor_level
+
+
+
+
