@@ -831,15 +831,16 @@ def _boundary_raster(points_2d, cell, fill_gap, simplify_eps_frac, logger,
 def point_axis_align(df, survey_basis):
     """Rotate a frame's xyz into the axis-aligned working frame.
 
-    ``survey_basis`` is SURVEY_BASIS exactly as configured, and the alignment is
-    ``xyz @ SURVEY_BASIS``. Results rotate back out with ``@ SURVEY_BASIS.T``,
-    so in-then-out is the identity and output stays in the input cloud's frame.
+    ``survey_basis`` is SURVEY_BASIS exactly as configured, applied directly with
+    no hidden transpose: the alignment is ``xyz @ SURVEY_BASIS``, and results
+    rotate back out with ``@ SURVEY_BASIS.T``, so in-then-out is the identity and
+    output stays in the input cloud's frame.
 
-    This used to apply ``.T`` internally while every caller passed
-    ``SURVEY_BASIS.T``, so the two cancelled and the net operation was the same
-    as now -- but neither the call site nor this function told you that on its
-    own, and getting it backwards rotates the building the wrong way by twice
-    the yaw while still producing a valid-looking rotation matrix.
+    Getting that direction backwards rotates the building the wrong way by TWICE
+    the yaw, and nothing raises -- a transposed rotation is still orthonormal
+    with determinant +1, so the geometry looks plausible. The check that catches
+    it is the footprint: a correct basis can only SHRINK the axis-aligned
+    bounding area, while a transposed one enlarges it.
     """
     xyz = df[['x', 'y', 'z']].values
     rotated_xyz = xyz @ np.asarray(survey_basis)

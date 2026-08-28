@@ -25,7 +25,13 @@ neighbourhood radius is derived from the cloud's own diagonal.
 
 Usage
 -----
-    from survey_basis import survey_basis_from_df
+Normally nothing calls this directly: leave ``SURVEY_BASIS`` unset (or None) and
+the floor/ceiling/wall stages estimate it via stages.common.resolve_survey_basis,
+which memoises the result so the three stages do not each re-estimate it.
+
+To compute one explicitly::
+
+    from post_process.utils.survey_basis_util import survey_basis_from_df
     parameters["SURVEY_BASIS"] = survey_basis_from_df(df)
 """
 
