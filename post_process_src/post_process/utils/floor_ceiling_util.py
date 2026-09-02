@@ -1138,13 +1138,21 @@ def cluster_floor_ceiling(df, eps, min_samples, type, blobs=None, min_points=100
     # the noise and the below-min_points clusters that cluster_dict drops. Those
     # discards are exactly what you need to see when tuning eps -- a merge and a
     # shatter both leave the surviving clusters looking plausible on their own.
+    #
+    # This block is common to both splitters, so the method is interpolated into the
+    # name and the log rather than hardcoded. It previously wrote "<type>_dbscan.html"
+    # and logged "DBSCAN" unconditionally, which reported the wrong algorithm on every
+    # histogram run -- the default -- and cost a caller real time deciding whether
+    # CLUSTER_METHOD_C had been ignored.
     if blobs is not None or local_dir:
+        method_label = str(method).lower()
         n_noise = int((labels == -1).sum())
         n_small = len([l for l in np.unique(labels)
                        if l != -1 and (labels == l).sum() <= min_points])
         logger.info(
-            "%s DBSCAN: %d clusters, %d kept, %d dropped as small, %.1f%% noise",
-            type, len(np.unique(labels[labels != -1])), len(cluster_dict),
+            "%s %s clustering: %d clusters, %d kept, %d dropped as small, "
+            "%.1f%% noise", type, method_label,
+            len(np.unique(labels[labels != -1])), len(cluster_dict),
             n_small, 100.0 * n_noise / max(1, len(labels)),
         )
         write_html_output(
@@ -1153,7 +1161,7 @@ def cluster_floor_ceiling(df, eps, min_samples, type, blobs=None, min_points=100
                 colors_rgb=label_colors(labels),
                 point_size=2,
             ),
-            f"{type}_dbscan.html",
+            f"{type}_{method_label}.html",
             blobs=blobs,
             local_dir=local_dir,
         )
@@ -1415,8 +1423,12 @@ def fit_ceiling_floor(
             outlier_pts,
             point_size=2,
         )
+        # Both fitters reach here, so the name carries whichever one ran. This was
+        # "<type>_ransac_<n>.html" regardless, which read as RANSAC output on every
+        # IRLS run -- the default since 0.7.0.
         write_html_output(snapshot_html_bytes,
-                          f"{type}_ransac_{snapshot_idx}.html", blobs, local_dir)
+                          f"{type}_{str(plane_method).lower()}_{snapshot_idx}.html",
+                          blobs, local_dir)
 
     centroid = np.mean(np.asarray(inlier_cloud.points), axis=0)
     bbox = inlier_cloud.get_oriented_bounding_box()
